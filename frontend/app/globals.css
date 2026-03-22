@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply min-h-screen bg-slate-950 text-slate-50 antialiased;
+  background-image:
+    radial-gradient(circle at top left, rgba(25, 167, 176, 0.16), transparent 22%),
+    radial-gradient(circle at top right, rgba(244, 162, 97, 0.18), transparent 28%),
+    linear-gradient(180deg, #07131a 0%, #081923 45%, #09141c 100%);
+}
+
+a {
+  @apply text-inherit no-underline;
+}
+
+.data-grid {
+  @apply grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)];
+}
+
+.page-stack {
+  @apply flex min-h-screen flex-col;
+}
