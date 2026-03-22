@@ -1,0 +1,73 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file:
+      - ../.env
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-supplyiq} -d ${POSTGRES_DB:-supplyiq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.backend
+    env_file:
+      - ../backend/.env
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/analytics/overview').read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.frontend
+    env_file:
+      - ../frontend/.env
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  pipeline:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.backend
+    env_file:
+      - ../pipeline/.env
+      - ../backend/.env
+    command: ["sh", "-c", "python -m pipeline.flows.ingestion_flow && python -m pipeline.flows.alert_flow"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  postgres_data:
