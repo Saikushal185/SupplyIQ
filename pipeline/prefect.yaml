@@ -1,0 +1,7 @@
+name: supplyiq-pipeline
+prefect-version: 3.1.7
+deployments:
+  - name: ingestion
+    entrypoint: pipeline/flows/ingestion_flow.py:run_ingestion_flow
+  - name: alerts
+    entrypoint: pipeline/flows/alert_flow.py:run_alert_flow
