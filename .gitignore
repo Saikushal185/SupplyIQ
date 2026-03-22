@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.local
+.next/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+backend/ml/artifacts/*
+!backend/ml/artifacts/.gitkeep
+postgres_data/
+
+# AI-specific ignores
+.claude
