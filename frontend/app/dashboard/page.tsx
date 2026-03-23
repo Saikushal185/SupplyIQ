@@ -1,20 +1,42 @@
-import { fetchAlerts, fetchAnalyticsOverview, fetchStockouts } from "@/lib/api";
+"use client";
+
 import { DemandAreaChart } from "@/components/charts/DemandAreaChart";
 import { DataTable } from "@/components/ui/DataTable";
 import { SectionCard } from "@/components/ui/SectionCard";
 import { StatCard } from "@/components/ui/StatCard";
+import { useAlerts, useAnalyticsOverview, useStockouts } from "@/lib/hooks";
 
-export default async function DashboardPage() {
-  const [overview, alerts, stockouts] = await Promise.all([
-    fetchAnalyticsOverview(),
-    fetchAlerts(),
-    fetchStockouts(),
-  ]);
+function LoadingState() {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-300">
+      Loading live dashboard data...
+    </div>
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div className="rounded-3xl border border-rose-400/20 bg-rose-400/10 p-6 text-sm text-rose-100">{message}</div>
+  );
+}
+
+export default function DashboardPage() {
+  const overview = useAnalyticsOverview();
+  const alerts = useAlerts();
+  const stockouts = useStockouts();
+
+  if (overview.error || alerts.error || stockouts.error) {
+    return <ErrorState message="Unable to load the dashboard. Check backend connectivity or your session token." />;
+  }
+
+  if (!overview.data || !alerts.data || !stockouts.data) {
+    return <LoadingState />;
+  }
 
   return (
     <div className="space-y-6">
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {overview.kpis.map((kpi) => (
+        {overview.data.kpis.map((kpi) => (
           <StatCard
             key={kpi.label}
             label={kpi.label}
@@ -30,7 +52,7 @@ export default async function DashboardPage() {
           title="Demand Momentum"
           subtitle="Six-period demand shape derived from current inventory and planning coverage."
         >
-          <DemandAreaChart points={overview.demand_series} />
+          <DemandAreaChart points={overview.data.demand_series} />
         </SectionCard>
 
         <SectionCard
@@ -38,7 +60,7 @@ export default async function DashboardPage() {
           subtitle="Most recent disruption signals flowing through the supply network."
         >
           <div className="space-y-3">
-            {alerts.items.map((alert) => (
+            {alerts.data.items.map((alert) => (
               <div key={alert.alert_id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -61,9 +83,18 @@ export default async function DashboardPage() {
         subtitle="Inventory positions already below reorder threshold and likely to need intervention."
       >
         <DataTable
-          rows={stockouts.items}
+          rows={stockouts.data.items}
           columns={[
-            { key: "product", header: "Product", render: (row) => <div><p className="font-medium text-white">{row.product_name}</p><p className="text-xs text-slate-400">{row.sku}</p></div> },
+            {
+              key: "product",
+              header: "Product",
+              render: (row) => (
+                <div>
+                  <p className="font-medium text-white">{row.product_name}</p>
+                  <p className="text-xs text-slate-400">{row.sku}</p>
+                </div>
+              ),
+            },
             { key: "region", header: "Region", render: (row) => row.region_name },
             { key: "onhand", header: "On Hand", render: (row) => row.quantity_on_hand },
             { key: "inbound", header: "Inbound", render: (row) => row.inbound_units },
