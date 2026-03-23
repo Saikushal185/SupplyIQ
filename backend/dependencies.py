@@ -1,7 +1,7 @@
 """FastAPI dependencies for backend services."""
 
 from fastapi import Depends, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services.cache_service import CacheService
 from backend.services.db_service import get_db_session
@@ -15,7 +15,7 @@ def get_backend_settings() -> Settings:
     return get_settings()
 
 
-def get_db(session: Session = Depends(get_db_session)) -> Session:
+async def get_db(session: AsyncSession = Depends(get_db_session)) -> AsyncSession:
     """Returns the active SQLAlchemy session."""
 
     return session
