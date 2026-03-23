@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.dependencies import get_cache_service, get_db
 from backend.models.schemas import AlertListResponse, AlertQuery, AnalyticsOverviewResponse, AnalyticsQuery, DemandPoint, SupplierPerformanceResponse
@@ -36,20 +36,20 @@ def build_alert_query(
 
 
 @router.get("/overview", response_model=AnalyticsOverviewResponse)
-def get_overview(
+async def get_overview(
     query: Annotated[AnalyticsQuery, Depends(build_analytics_query)],
-    session: Annotated[Session, Depends(get_db)],
+    session: Annotated[AsyncSession, Depends(get_db)],
     cache_service: Annotated[CacheService, Depends(get_cache_service)],
 ) -> AnalyticsOverviewResponse:
     """Returns KPI and demand trend data for the analytics overview page."""
 
     cache_key = cache_service.build_key("analytics_overview", query.model_dump())
-    cached = cache_service.get_json(cache_key)
+    cached = await cache_service.get_json(cache_key)
     if cached is not None:
         return AnalyticsOverviewResponse.model_validate(cached)
 
-    kpis = db_service.build_analytics_kpis(session, region_code=query.region_code)
-    positions = db_service.list_inventory_positions(session, region_code=query.region_code, limit=100)
+    kpis = await db_service.build_analytics_kpis(session, region_code=query.region_code)
+    positions = await db_service.list_inventory_positions(session, region_code=query.region_code, limit=100)
     base_demand = sum(max(int(item.quantity_on_hand / max(item.days_of_cover, 1)), 1) for item in positions)
     demand_series = [
         DemandPoint(
@@ -65,52 +65,52 @@ def get_overview(
         kpis=kpis,
         demand_series=demand_series,
     )
-    cache_service.set_json(cache_key, response.model_dump())
+    await cache_service.set_json(cache_key, response.model_dump())
     return response
 
 
 @router.get("/supplier-performance", response_model=SupplierPerformanceResponse)
-def get_supplier_performance(
+async def get_supplier_performance(
     query: Annotated[AnalyticsQuery, Depends(build_analytics_query)],
-    session: Annotated[Session, Depends(get_db)],
+    session: Annotated[AsyncSession, Depends(get_db)],
     cache_service: Annotated[CacheService, Depends(get_cache_service)],
 ) -> SupplierPerformanceResponse:
     """Returns supplier reliability and fill-rate analytics."""
 
     cache_key = cache_service.build_key("supplier_performance", query.model_dump())
-    cached = cache_service.get_json(cache_key)
+    cached = await cache_service.get_json(cache_key)
     if cached is not None:
         return SupplierPerformanceResponse.model_validate(cached)
 
     response = SupplierPerformanceResponse(
         generated_at=datetime.now(timezone.utc),
-        items=db_service.build_supplier_performance(session, region_code=query.region_code),
+        items=await db_service.build_supplier_performance(session, region_code=query.region_code),
     )
-    cache_service.set_json(cache_key, response.model_dump())
+    await cache_service.set_json(cache_key, response.model_dump())
     return response
 
 
 @router.get("/alerts", response_model=AlertListResponse)
-def get_alerts(
+async def get_alerts(
     query: Annotated[AlertQuery, Depends(build_alert_query)],
-    session: Annotated[Session, Depends(get_db)],
+    session: Annotated[AsyncSession, Depends(get_db)],
     cache_service: Annotated[CacheService, Depends(get_cache_service)],
 ) -> AlertListResponse:
     """Returns current active alerts for the requested scope."""
 
     cache_key = cache_service.build_key("alerts", query.model_dump())
-    cached = cache_service.get_json(cache_key)
+    cached = await cache_service.get_json(cache_key)
     if cached is not None:
         return AlertListResponse.model_validate(cached)
 
     response = AlertListResponse(
         generated_at=datetime.now(timezone.utc),
-        items=db_service.list_alerts(
+        items=await db_service.list_alerts(
             session,
             region_code=query.region_code,
             severity=query.severity,
             limit=query.limit,
         ),
     )
-    cache_service.set_json(cache_key, response.model_dump())
+    await cache_service.set_json(cache_key, response.model_dump())
     return response
