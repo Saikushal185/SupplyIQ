@@ -1,5 +1,15 @@
 export type SeverityLevel = "low" | "medium" | "high" | "critical";
 
+export interface SessionSnapshot {
+  isLoaded: boolean;
+  isSignedIn: boolean;
+  userId: string | null;
+  displayName: string;
+  primaryEmail: string | null;
+  roleLabel: string;
+  getToken: () => Promise<string | null>;
+}
+
 export interface KPI {
   label: string;
   value: number;
