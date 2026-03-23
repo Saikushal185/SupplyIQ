@@ -8,7 +8,7 @@ import { Topbar } from "@/components/layout/Topbar";
 
 export function AppShell({ children }: PropsWithChildren) {
   const pathname = usePathname();
-  const isAuthRoute = pathname === "/login";
+  const isAuthRoute = pathname.startsWith("/login");
 
   if (isAuthRoute) {
     return <div className="page-stack">{children}</div>;
