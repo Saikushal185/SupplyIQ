@@ -1,4 +1,4 @@
-"""Redis cache helpers for SupplyIQ."""
+"""Async Redis cache helpers for SupplyIQ."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from redis import Redis
+from redis.asyncio import Redis
 
 from backend.settings import get_settings
 
@@ -28,10 +28,12 @@ def _serialize_value(value: object) -> object:
 class CacheService:
     """Provides simple JSON caching around Redis."""
 
-    def __init__(self) -> None:
+    def __init__(self, client: Redis | None = None, ttl_seconds: int | None = None) -> None:
+        """Builds the cache service with optional injected client dependencies."""
+
         settings = get_settings()
-        self._ttl_seconds = settings.cache_ttl_seconds
-        self._client = Redis.from_url(settings.redis_url, decode_responses=True)
+        self._ttl_seconds = ttl_seconds or settings.cache_ttl_seconds
+        self._client = client or Redis.from_url(settings.redis_url, decode_responses=True)
 
     def build_key(self, namespace: str, payload: dict[str, object]) -> str:
         """Builds a stable cache key from a namespace and parameter payload."""
@@ -42,16 +44,21 @@ class CacheService:
         ).hexdigest()
         return f"supplyiq:{namespace}:{digest}"
 
-    def get_json(self, key: str) -> dict[str, object] | list[object] | None:
+    async def get_json(self, key: str) -> dict[str, object] | list[object] | None:
         """Returns cached JSON data if it exists."""
 
-        raw_value = self._client.get(key)
+        raw_value = await self._client.get(key)
         if raw_value is None:
             return None
         return json.loads(raw_value)
 
-    def set_json(self, key: str, value: object) -> None:
+    async def set_json(self, key: str, value: object) -> None:
         """Stores JSON-serializable data in Redis with the default TTL."""
 
         serialized = json.dumps(value, default=_serialize_value)
-        self._client.setex(key, self._ttl_seconds, serialized)
+        await self._client.setex(key, self._ttl_seconds, serialized)
+
+    async def close(self) -> None:
+        """Closes the underlying Redis client."""
+
+        await self._client.aclose()
