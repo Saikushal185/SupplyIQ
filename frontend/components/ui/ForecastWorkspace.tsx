@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 
-import { generateForecast, fetchForecastHistory } from "@/lib/api";
+import { useSessionContext } from "@/context/session-context";
+import { fetchForecastHistory, generateForecast } from "@/lib/api";
 import type { ForecastHistoryResponse, ForecastRecordResponse, InventoryPositionItem } from "@/types";
 
 interface ForecastWorkspaceProps {
@@ -11,10 +12,11 @@ interface ForecastWorkspaceProps {
 
 /** Creates a stable option label for a product-region forecast scope. */
 function buildScopeLabel(position: InventoryPositionItem): string {
-  return `${position.product_name} · ${position.region_name}`;
+  return `${position.product_name} - ${position.region_name}`;
 }
 
 export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
+  const session = useSessionContext();
   const scopes = positions.map((position) => ({
     key: `${position.product_id}:${position.region_id}`,
     label: buildScopeLabel(position),
@@ -40,12 +42,16 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
     setIsSubmitting(true);
     setError(null);
     try {
-      const forecast = await generateForecast({
-        product_id: resolvedScope.productId,
-        region_id: resolvedScope.regionId,
-        horizon_days: horizonDays,
-      });
-      const historyResponse = await fetchForecastHistory(resolvedScope.productId);
+      const token = await session.getToken();
+      const forecast = await generateForecast(
+        {
+          product_id: resolvedScope.productId,
+          region_id: resolvedScope.regionId,
+          horizon_days: horizonDays,
+        },
+        token,
+      );
+      const historyResponse = await fetchForecastHistory(resolvedScope.productId, token);
       setLatestForecast(forecast);
       setHistory(historyResponse);
     } catch (requestError) {
@@ -141,7 +147,7 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
                     <div>
                       <p className="font-medium text-white">{item.product_name}</p>
                       <p className="text-sm text-slate-400">
-                        {item.region_name} · {item.horizon_days} day horizon
+                        {item.region_name} - {item.horizon_days} day horizon
                       </p>
                     </div>
                     <div className="text-right">
