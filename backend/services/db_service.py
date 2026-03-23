@@ -1,13 +1,13 @@
-"""Database helpers for SupplyIQ."""
+"""Async database helpers for SupplyIQ."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Generator
+from typing import AsyncGenerator
 from uuid import UUID
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.models.db_models import Base, ForecastRun, InventoryAlert, InventorySnapshot, Product, Region, Supplier
 from backend.models.schemas import (
@@ -22,28 +22,50 @@ from backend.models.schemas import (
 from backend.settings import get_settings
 
 settings = get_settings()
-engine = create_engine(settings.database_url, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
-def initialize_database() -> None:
+def build_async_database_url(database_url: str) -> str:
+    """Converts SQLAlchemy sync PostgreSQL URLs into asyncpg URLs."""
+
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url
+    if database_url.startswith("postgresql+psycopg://"):
+        return database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgresql+psycopg2://"):
+        return database_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return database_url
+
+
+engine = create_async_engine(build_async_database_url(settings.database_url), pool_pre_ping=True)
+SessionLocal = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+async def initialize_database() -> None:
     """Creates the database tables if they do not exist yet."""
 
-    Base.metadata.create_all(bind=engine)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
 
 
-def get_db_session() -> Generator[Session, None, None]:
-    """Yields a database session to FastAPI endpoints."""
+async def dispose_database_engine() -> None:
+    """Closes the shared async SQLAlchemy engine."""
 
-    session = SessionLocal()
-    try:
+    await engine.dispose()
+
+
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Yields an async SQLAlchemy session to FastAPI endpoints."""
+
+    async with SessionLocal() as session:
         yield session
-    finally:
-        session.close()
 
 
-def _load_current_inventory_rows(
-    session: Session,
+async def _load_current_inventory_rows(
+    session: AsyncSession,
     region_code: str | None = None,
 ) -> list[tuple[InventorySnapshot, Product, Region, Supplier]]:
     """Loads the latest inventory row for each product-region combination."""
@@ -58,35 +80,35 @@ def _load_current_inventory_rows(
     if region_code is not None:
         statement = statement.where(Region.region_code == region_code)
 
-    rows = session.execute(statement).all()
+    rows = (await session.execute(statement)).all()
     latest_rows: dict[tuple[UUID, UUID], tuple[InventorySnapshot, Product, Region, Supplier]] = {}
     for snapshot, product, region, supplier in rows:
         latest_rows.setdefault((snapshot.product_id, snapshot.region_id), (snapshot, product, region, supplier))
     return list(latest_rows.values())
 
 
-def get_inventory_context(
-    session: Session,
+async def get_inventory_context(
+    session: AsyncSession,
     *,
     product_id: UUID,
     region_id: UUID,
 ) -> tuple[InventorySnapshot, Product, Region, Supplier]:
     """Returns the latest inventory context for a product-region pair."""
 
-    for snapshot, product, region, supplier in _load_current_inventory_rows(session):
+    for snapshot, product, region, supplier in await _load_current_inventory_rows(session):
         if product.id == product_id and region.id == region_id:
             return snapshot, product, region, supplier
     raise LookupError("Inventory context was not found for the requested product and region.")
 
 
-def build_analytics_kpis(
-    session: Session,
+async def build_analytics_kpis(
+    session: AsyncSession,
     *,
     region_code: str | None = None,
 ) -> list[KPI]:
     """Builds the analytics KPI collection from current inventory data."""
 
-    rows = _load_current_inventory_rows(session, region_code=region_code)
+    rows = await _load_current_inventory_rows(session, region_code=region_code)
     total_inventory_units = sum(snapshot.quantity_on_hand for snapshot, *_ in rows)
     total_reserved_units = sum(snapshot.quantity_reserved for snapshot, *_ in rows)
     below_reorder = len([row for row in rows if row[0].quantity_on_hand + row[0].inbound_units < row[1].reorder_point])
@@ -107,20 +129,20 @@ def build_analytics_kpis(
     ]
 
 
-def build_supplier_performance(
-    session: Session,
+async def build_supplier_performance(
+    session: AsyncSession,
     *,
     region_code: str | None = None,
 ) -> list[SupplierPerformanceItem]:
     """Builds supplier performance metrics from current inventory state."""
 
-    rows = _load_current_inventory_rows(session, region_code=region_code)
+    rows = await _load_current_inventory_rows(session, region_code=region_code)
     grouped: dict[UUID, list[tuple[InventorySnapshot, Product, Region, Supplier]]] = {}
     for row in rows:
         grouped.setdefault(row[3].id, []).append(row)
 
     items: list[SupplierPerformanceItem] = []
-    for supplier_id, supplier_rows in grouped.items():
+    for supplier_rows in grouped.values():
         supplier = supplier_rows[0][3]
         reliability_score = float(supplier.reliability_score)
         fill_rate_pct = round(
@@ -135,7 +157,7 @@ def build_supplier_performance(
         risk_level = "critical" if reliability_score < 0.82 else "high" if reliability_score < 0.88 else "medium" if reliability_score < 0.93 else "low"
         items.append(
             SupplierPerformanceItem(
-                supplier_id=supplier_id,
+                supplier_id=supplier.id,
                 supplier_code=supplier.supplier_code,
                 name=supplier.name,
                 reliability_score=reliability_score,
@@ -149,8 +171,8 @@ def build_supplier_performance(
     return sorted(items, key=lambda item: (item.risk_level, item.fill_rate_pct))
 
 
-def list_alerts(
-    session: Session,
+async def list_alerts(
+    session: AsyncSession,
     *,
     region_code: str | None = None,
     severity: str | None = None,
@@ -169,7 +191,7 @@ def list_alerts(
     if severity is not None:
         statement = statement.where(InventoryAlert.severity == severity)
 
-    rows = session.execute(statement.limit(limit)).all()
+    rows = (await session.execute(statement.limit(limit))).all()
     return [
         AlertItem(
             alert_id=alert.id,
@@ -186,8 +208,8 @@ def list_alerts(
     ]
 
 
-def list_inventory_positions(
-    session: Session,
+async def list_inventory_positions(
+    session: AsyncSession,
     *,
     region_code: str | None = None,
     below_reorder_only: bool = False,
@@ -195,7 +217,7 @@ def list_inventory_positions(
 ) -> list[InventoryPositionItem]:
     """Returns latest inventory positions with derived risk labels."""
 
-    rows = _load_current_inventory_rows(session, region_code=region_code)
+    rows = await _load_current_inventory_rows(session, region_code=region_code)
     items: list[InventoryPositionItem] = []
     for snapshot, product, region, _supplier in rows:
         available_units = snapshot.quantity_on_hand + snapshot.inbound_units - snapshot.quantity_reserved
@@ -222,8 +244,28 @@ def list_inventory_positions(
     return items[:limit]
 
 
-def save_forecast_run(
-    session: Session,
+def _to_forecast_response(record: ForecastRun, product: Product, region: Region) -> ForecastRecordResponse:
+    """Maps ORM objects into the forecast response schema."""
+
+    return ForecastRecordResponse(
+        forecast_id=record.id,
+        product_id=product.id,
+        region_id=region.id,
+        product_name=product.name,
+        region_name=region.name,
+        horizon_days=record.horizon_days,
+        predicted_demand_units=record.predicted_demand_units,
+        lower_bound_units=record.lower_bound_units,
+        upper_bound_units=record.upper_bound_units,
+        stockout_probability_pct=float(record.stockout_probability_pct),
+        recommended_reorder_units=record.recommended_reorder_units,
+        model_version=record.model_version,
+        generated_at=record.generated_at,
+    )
+
+
+async def save_forecast_run(
+    session: AsyncSession,
     *,
     product: Product,
     region: Region,
@@ -249,26 +291,17 @@ def save_forecast_run(
         model_version=model_version,
     )
     session.add(record)
-    session.commit()
-    session.refresh(record)
-    return ForecastRecordResponse(
-        forecast_id=record.id,
-        product_id=product.id,
-        region_id=region.id,
-        product_name=product.name,
-        region_name=region.name,
-        horizon_days=record.horizon_days,
-        predicted_demand_units=record.predicted_demand_units,
-        lower_bound_units=record.lower_bound_units,
-        upper_bound_units=record.upper_bound_units,
-        stockout_probability_pct=float(record.stockout_probability_pct),
-        recommended_reorder_units=record.recommended_reorder_units,
-        model_version=record.model_version,
-        generated_at=record.generated_at,
-    )
+    await session.commit()
+    await session.refresh(record)
+    return _to_forecast_response(record, product, region)
 
 
-def get_latest_forecast(session: Session, *, product_id: UUID, region_id: UUID) -> ForecastRecordResponse | None:
+async def get_latest_forecast(
+    session: AsyncSession,
+    *,
+    product_id: UUID,
+    region_id: UUID,
+) -> ForecastRecordResponse | None:
     """Returns the newest forecast for a product-region pair."""
 
     statement = (
@@ -278,29 +311,15 @@ def get_latest_forecast(session: Session, *, product_id: UUID, region_id: UUID) 
         .where(ForecastRun.product_id == product_id, ForecastRun.region_id == region_id)
         .order_by(ForecastRun.generated_at.desc())
     )
-    row = session.execute(statement).first()
+    row = (await session.execute(statement)).first()
     if row is None:
         return None
 
     record, product, region = row
-    return ForecastRecordResponse(
-        forecast_id=record.id,
-        product_id=product.id,
-        region_id=region.id,
-        product_name=product.name,
-        region_name=region.name,
-        horizon_days=record.horizon_days,
-        predicted_demand_units=record.predicted_demand_units,
-        lower_bound_units=record.lower_bound_units,
-        upper_bound_units=record.upper_bound_units,
-        stockout_probability_pct=float(record.stockout_probability_pct),
-        recommended_reorder_units=record.recommended_reorder_units,
-        model_version=record.model_version,
-        generated_at=record.generated_at,
-    )
+    return _to_forecast_response(record, product, region)
 
 
-def get_forecast_history(session: Session, *, product_id: UUID) -> list[ForecastRecordResponse]:
+async def get_forecast_history(session: AsyncSession, *, product_id: UUID) -> list[ForecastRecordResponse]:
     """Returns forecast history for a product across all regions."""
 
     statement = (
@@ -310,39 +329,22 @@ def get_forecast_history(session: Session, *, product_id: UUID) -> list[Forecast
         .where(ForecastRun.product_id == product_id)
         .order_by(ForecastRun.generated_at.desc())
     )
-    rows = session.execute(statement).all()
-    return [
-        ForecastRecordResponse(
-            forecast_id=record.id,
-            product_id=product.id,
-            region_id=region.id,
-            product_name=product.name,
-            region_name=region.name,
-            horizon_days=record.horizon_days,
-            predicted_demand_units=record.predicted_demand_units,
-            lower_bound_units=record.lower_bound_units,
-            upper_bound_units=record.upper_bound_units,
-            stockout_probability_pct=float(record.stockout_probability_pct),
-            recommended_reorder_units=record.recommended_reorder_units,
-            model_version=record.model_version,
-            generated_at=record.generated_at,
-        )
-        for record, product, region in rows
-    ]
+    rows = (await session.execute(statement)).all()
+    return [_to_forecast_response(record, product, region) for record, product, region in rows]
 
 
-def rebalance_inventory(
-    session: Session,
+async def rebalance_inventory(
+    session: AsyncSession,
     request: InventoryRebalanceRequest,
 ) -> InventoryRebalanceResponse:
     """Creates post-transfer inventory snapshots for the source and target regions."""
 
-    source_snapshot, source_product, _source_region, _source_supplier = get_inventory_context(
+    source_snapshot, source_product, _source_region, _source_supplier = await get_inventory_context(
         session,
         product_id=request.product_id,
         region_id=request.source_region_id,
     )
-    target_snapshot, _target_product, _target_region, _target_supplier = get_inventory_context(
+    target_snapshot, _target_product, _target_region, _target_supplier = await get_inventory_context(
         session,
         product_id=request.product_id,
         region_id=request.target_region_id,
@@ -367,7 +369,7 @@ def rebalance_inventory(
         inbound_units=target_snapshot.inbound_units,
     )
     session.add_all([source_record, target_record])
-    session.commit()
+    await session.commit()
 
     return InventoryRebalanceResponse(
         generated_at=datetime.now(timezone.utc),
