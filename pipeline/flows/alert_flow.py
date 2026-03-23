@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 
 from prefect import flow
+import psycopg
 from redis import Redis
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
-
-from backend.models.db_models import InventoryAlert
+from pipeline.tasks.database import build_postgres_dsn
 
 
 def refresh_alert_cache() -> dict[str, object]:
@@ -21,18 +20,24 @@ def refresh_alert_cache() -> dict[str, object]:
     if not database_url or not redis_url:
         raise RuntimeError("PIPELINE_DATABASE_URL and PIPELINE_REDIS_URL must be set for alert flow execution.")
 
-    engine = create_engine(database_url, pool_pre_ping=True)
     redis_client = Redis.from_url(redis_url, decode_responses=True)
-
-    with Session(engine) as session:
-        alerts = session.execute(select(InventoryAlert).where(InventoryAlert.acknowledged.is_(False))).scalars().all()
+    with psycopg.connect(build_postgres_dsn(database_url)) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT severity
+                FROM inventory_alerts
+                WHERE acknowledged = FALSE
+                """
+            )
+            severities = [row[0] for row in cursor.fetchall()]
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "open_alert_count": len(alerts),
-        "critical_alert_count": len([alert for alert in alerts if alert.severity == "critical"]),
+        "open_alert_count": len(severities),
+        "critical_alert_count": len([severity for severity in severities if severity == "critical"]),
     }
-    redis_client.setex("supplyiq:pipeline:alert_summary", 300, str(payload))
+    redis_client.setex("supplyiq:pipeline:alert_summary", 300, json.dumps(payload))
     return payload
 
 
