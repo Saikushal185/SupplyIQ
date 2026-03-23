@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.ml.predict import build_feature_vector, run_inference
 from backend.models.schemas import ForecastGenerateRequest, ForecastRecordResponse
@@ -44,14 +44,14 @@ class ForecastService:
             version=str(raw_artifact.get("version", "unknown")),
         )
 
-    def generate_forecast(
+    async def generate_forecast(
         self,
-        session: Session,
+        session: AsyncSession,
         request: ForecastGenerateRequest,
     ) -> ForecastRecordResponse:
         """Generates and persists a forecast for a single product-region pair."""
 
-        snapshot, product, region, supplier = db_service.get_inventory_context(
+        snapshot, product, region, supplier = await db_service.get_inventory_context(
             session,
             product_id=request.product_id,
             region_id=request.region_id,
@@ -76,7 +76,7 @@ class ForecastService:
             },
             feature_vector,
         )
-        return db_service.save_forecast_run(
+        return await db_service.save_forecast_run(
             session,
             product=product,
             region=region,
