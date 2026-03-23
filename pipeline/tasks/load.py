@@ -2,112 +2,250 @@
 
 from __future__ import annotations
 
-import os
-
+import psycopg
 from prefect import task
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
 
-from backend.models.db_models import InventoryAlert, InventorySnapshot, Product, Region, Supplier
+from pipeline.tasks.database import build_postgres_dsn, get_pipeline_database_url
 
 
-def _session_factory() -> sessionmaker[Session]:
-    """Creates a SQLAlchemy session factory for pipeline writes."""
+def _upsert_supplier(cursor: psycopg.Cursor[tuple[object, ...]], payload: dict[str, object]) -> object:
+    """Upserts a supplier row and returns its primary key."""
 
-    database_url = os.getenv("PIPELINE_DATABASE_URL") or os.getenv("BACKEND_DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("PIPELINE_DATABASE_URL must be set for pipeline loading.")
-    engine = create_engine(database_url, pool_pre_ping=True)
-    return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    cursor.execute(
+        """
+        SELECT id
+        FROM suppliers
+        WHERE supplier_code = %s
+        """,
+        (payload["supplier_code"],),
+    )
+    existing = cursor.fetchone()
+    if existing is not None:
+        cursor.execute(
+            """
+            UPDATE suppliers
+            SET name = %s,
+                country = %s,
+                reliability_score = %s,
+                lead_time_days = %s
+            WHERE id = %s
+            """,
+            (
+                payload["name"],
+                payload["country"],
+                payload["reliability_score"],
+                payload["lead_time_days"],
+                existing[0],
+            ),
+        )
+        return existing[0]
+
+    cursor.execute(
+        """
+        INSERT INTO suppliers (supplier_code, name, country, reliability_score, lead_time_days)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            payload["supplier_code"],
+            payload["name"],
+            payload["country"],
+            payload["reliability_score"],
+            payload["lead_time_days"],
+        ),
+    )
+    created = cursor.fetchone()
+    if created is None:
+        raise RuntimeError("Supplier insert did not return an id.")
+    return created[0]
+
+
+def _upsert_region(cursor: psycopg.Cursor[tuple[object, ...]], payload: dict[str, object]) -> object:
+    """Upserts a region row and returns its primary key."""
+
+    cursor.execute(
+        """
+        SELECT id
+        FROM regions
+        WHERE region_code = %s
+        """,
+        (payload["region_code"],),
+    )
+    existing = cursor.fetchone()
+    if existing is not None:
+        cursor.execute(
+            """
+            UPDATE regions
+            SET name = %s,
+                market = %s,
+                risk_factor = %s
+            WHERE id = %s
+            """,
+            (
+                payload["name"],
+                payload["market"],
+                payload["risk_factor"],
+                existing[0],
+            ),
+        )
+        return existing[0]
+
+    cursor.execute(
+        """
+        INSERT INTO regions (region_code, name, market, risk_factor)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            payload["region_code"],
+            payload["name"],
+            payload["market"],
+            payload["risk_factor"],
+        ),
+    )
+    created = cursor.fetchone()
+    if created is None:
+        raise RuntimeError("Region insert did not return an id.")
+    return created[0]
+
+
+def _upsert_product(
+    cursor: psycopg.Cursor[tuple[object, ...]],
+    payload: dict[str, object],
+    supplier_id: object,
+) -> object:
+    """Upserts a product row and returns its primary key."""
+
+    cursor.execute(
+        """
+        SELECT id
+        FROM products
+        WHERE sku = %s
+        """,
+        (payload["sku"],),
+    )
+    existing = cursor.fetchone()
+    if existing is not None:
+        cursor.execute(
+            """
+            UPDATE products
+            SET name = %s,
+                category = %s,
+                supplier_id = %s,
+                unit_cost = %s,
+                reorder_point = %s,
+                base_daily_demand = %s
+            WHERE id = %s
+            """,
+            (
+                payload["name"],
+                payload["category"],
+                supplier_id,
+                payload["unit_cost"],
+                payload["reorder_point"],
+                payload["base_daily_demand"],
+                existing[0],
+            ),
+        )
+        return existing[0]
+
+    cursor.execute(
+        """
+        INSERT INTO products (sku, name, category, supplier_id, unit_cost, reorder_point, base_daily_demand)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            payload["sku"],
+            payload["name"],
+            payload["category"],
+            supplier_id,
+            payload["unit_cost"],
+            payload["reorder_point"],
+            payload["base_daily_demand"],
+        ),
+    )
+    created = cursor.fetchone()
+    if created is None:
+        raise RuntimeError("Product insert did not return an id.")
+    return created[0]
+
+
+def _insert_alert(
+    cursor: psycopg.Cursor[tuple[object, ...]],
+    *,
+    product_id: object,
+    region_id: object,
+    payload: dict[str, object],
+) -> None:
+    """Inserts an alert row with explicit defaults required by direct SQL writes."""
+
+    cursor.execute(
+        """
+        INSERT INTO inventory_alerts (product_id, region_id, severity, message, triggered_by, acknowledged)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (
+            product_id,
+            region_id,
+            str(payload["severity"]),
+            str(payload["message"]),
+            str(payload["triggered_by"]),
+            False,
+        ),
+    )
 
 
 @task(name="load_supply_data")
 def load_supply_data(transformed_data: dict[str, list[dict[str, object]]]) -> dict[str, int]:
     """Upserts seed data into PostgreSQL and returns load counts."""
 
-    SessionFactory = _session_factory()
     counts = {"suppliers": 0, "regions": 0, "products": 0, "inventory": 0, "alerts": 0}
+    supplier_ids: dict[str, object] = {}
+    region_ids: dict[str, object] = {}
+    product_ids: dict[str, object] = {}
+    database_dsn = build_postgres_dsn(get_pipeline_database_url())
 
-    with SessionFactory() as session:
-        supplier_ids: dict[str, object] = {}
-        region_ids: dict[str, object] = {}
-        product_ids: dict[str, object] = {}
+    with psycopg.connect(database_dsn) as connection:
+        with connection.cursor() as cursor:
+            for payload in transformed_data["suppliers"]:
+                supplier_ids[str(payload["supplier_code"])] = _upsert_supplier(cursor, payload)
+                counts["suppliers"] += 1
 
-        for payload in transformed_data["suppliers"]:
-            record = session.execute(select(Supplier).where(Supplier.supplier_code == payload["supplier_code"])).scalar_one_or_none()
-            if record is None:
-                record = Supplier(**payload)
-                session.add(record)
-                session.flush()
-            else:
-                record.name = str(payload["name"])
-                record.country = str(payload["country"])
-                record.reliability_score = float(payload["reliability_score"])
-                record.lead_time_days = int(payload["lead_time_days"])
-            supplier_ids[str(payload["supplier_code"])] = record.id
-            counts["suppliers"] += 1
+            for payload in transformed_data["regions"]:
+                region_ids[str(payload["region_code"])] = _upsert_region(cursor, payload)
+                counts["regions"] += 1
 
-        for payload in transformed_data["regions"]:
-            record = session.execute(select(Region).where(Region.region_code == payload["region_code"])).scalar_one_or_none()
-            if record is None:
-                record = Region(**payload)
-                session.add(record)
-                session.flush()
-            else:
-                record.name = str(payload["name"])
-                record.market = str(payload["market"])
-                record.risk_factor = float(payload["risk_factor"])
-            region_ids[str(payload["region_code"])] = record.id
-            counts["regions"] += 1
+            for payload in transformed_data["products"]:
+                supplier_id = supplier_ids[str(payload["supplier_code"])]
+                product_ids[str(payload["sku"])] = _upsert_product(cursor, payload, supplier_id)
+                counts["products"] += 1
 
-        for payload in transformed_data["products"]:
-            supplier_id = supplier_ids[str(payload["supplier_code"])]
-            record = session.execute(select(Product).where(Product.sku == payload["sku"])).scalar_one_or_none()
-            mapped_payload = {
-                "sku": payload["sku"],
-                "name": payload["name"],
-                "category": payload["category"],
-                "supplier_id": supplier_id,
-                "unit_cost": payload["unit_cost"],
-                "reorder_point": payload["reorder_point"],
-                "base_daily_demand": payload["base_daily_demand"],
-            }
-            if record is None:
-                record = Product(**mapped_payload)
-                session.add(record)
-                session.flush()
-            else:
-                record.name = str(payload["name"])
-                record.category = str(payload["category"])
-                record.supplier_id = supplier_id
-                record.unit_cost = float(payload["unit_cost"])
-                record.reorder_point = int(payload["reorder_point"])
-                record.base_daily_demand = int(payload["base_daily_demand"])
-            product_ids[str(payload["sku"])] = record.id
-            counts["products"] += 1
+            for payload in transformed_data["inventory"]:
+                cursor.execute(
+                    """
+                    INSERT INTO inventory_snapshots (product_id, region_id, quantity_on_hand, quantity_reserved, inbound_units)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        product_ids[str(payload["sku"])],
+                        region_ids[str(payload["region_code"])],
+                        int(payload["quantity_on_hand"]),
+                        int(payload["quantity_reserved"]),
+                        int(payload["inbound_units"]),
+                    ),
+                )
+                counts["inventory"] += 1
 
-        for payload in transformed_data["inventory"]:
-            record = InventorySnapshot(
-                product_id=product_ids[str(payload["sku"])],
-                region_id=region_ids[str(payload["region_code"])],
-                quantity_on_hand=int(payload["quantity_on_hand"]),
-                quantity_reserved=int(payload["quantity_reserved"]),
-                inbound_units=int(payload["inbound_units"]),
-            )
-            session.add(record)
-            counts["inventory"] += 1
+            for payload in transformed_data.get("alerts", []):
+                _insert_alert(
+                    cursor,
+                    product_id=product_ids[str(payload["sku"])],
+                    region_id=region_ids[str(payload["region_code"])],
+                    payload=payload,
+                )
+                counts["alerts"] += 1
 
-        for payload in transformed_data.get("alerts", []):
-            record = InventoryAlert(
-                product_id=product_ids[str(payload["sku"])],
-                region_id=region_ids[str(payload["region_code"])],
-                severity=str(payload["severity"]),
-                message=str(payload["message"]),
-                triggered_by=str(payload["triggered_by"]),
-            )
-            session.add(record)
-            counts["alerts"] += 1
-
-        session.commit()
+        connection.commit()
 
     return counts
