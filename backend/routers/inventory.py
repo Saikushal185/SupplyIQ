@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.dependencies import get_cache_service, get_db
 from backend.models.schemas import InventoryPositionResponse, InventoryQuery, InventoryRebalanceRequest, InventoryRebalanceResponse
@@ -27,41 +27,41 @@ def build_inventory_query(
 
 
 @router.get("/positions", response_model=InventoryPositionResponse)
-def get_inventory_positions(
+async def get_inventory_positions(
     query: Annotated[InventoryQuery, Depends(build_inventory_query)],
-    session: Annotated[Session, Depends(get_db)],
+    session: Annotated[AsyncSession, Depends(get_db)],
     cache_service: Annotated[CacheService, Depends(get_cache_service)],
 ) -> InventoryPositionResponse:
     """Returns current inventory positions."""
 
     cache_key = cache_service.build_key("inventory_positions", query.model_dump())
-    cached = cache_service.get_json(cache_key)
+    cached = await cache_service.get_json(cache_key)
     if cached is not None:
         return InventoryPositionResponse.model_validate(cached)
 
     response = InventoryPositionResponse(
         generated_at=datetime.now(timezone.utc),
-        items=db_service.list_inventory_positions(
+        items=await db_service.list_inventory_positions(
             session,
             region_code=query.region_code,
             below_reorder_only=query.below_reorder_only,
             limit=query.limit,
         ),
     )
-    cache_service.set_json(cache_key, response.model_dump())
+    await cache_service.set_json(cache_key, response.model_dump())
     return response
 
 
 @router.get("/stockouts", response_model=InventoryPositionResponse)
-def get_stockout_candidates(
+async def get_stockout_candidates(
     query: Annotated[InventoryQuery, Depends(build_inventory_query)],
-    session: Annotated[Session, Depends(get_db)],
+    session: Annotated[AsyncSession, Depends(get_db)],
 ) -> InventoryPositionResponse:
     """Returns inventory positions already below their reorder threshold."""
 
     return InventoryPositionResponse(
         generated_at=datetime.now(timezone.utc),
-        items=db_service.list_inventory_positions(
+        items=await db_service.list_inventory_positions(
             session,
             region_code=query.region_code,
             below_reorder_only=True,
@@ -71,14 +71,14 @@ def get_stockout_candidates(
 
 
 @router.post("/rebalance", response_model=InventoryRebalanceResponse)
-def rebalance_inventory(
+async def rebalance_inventory(
     payload: InventoryRebalanceRequest,
-    session: Annotated[Session, Depends(get_db)],
+    session: Annotated[AsyncSession, Depends(get_db)],
 ) -> InventoryRebalanceResponse:
     """Moves inventory from one region to another by recording new snapshots."""
 
     try:
-        return db_service.rebalance_inventory(session, payload)
+        return await db_service.rebalance_inventory(session, payload)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
