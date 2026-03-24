@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Callable
 
-from prefect import flow
+try:
+    from prefect import flow
+except ModuleNotFoundError:  # pragma: no cover - lightweight fallback for local unit imports
+    def flow(*_args, **_kwargs):
+        def decorator(func):
+            func.fn = func
+            return func
+        return decorator
 
 from pipeline.tasks.extract import extract_seed_supply_data
 from pipeline.tasks.load import load_supply_data
