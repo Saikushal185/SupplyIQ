@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
 from typing import AsyncGenerator
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.models.db_models import Base, ForecastRun, InventoryAlert, InventorySnapshot, Product, Region, Supplier
+from backend.models.db_models import DailySale, ForecastRun, InventorySnapshot, Product, Region, SupplierShipment, Base
 from backend.models.schemas import (
     AlertItem,
+    DemandPoint,
+    ForecastExplainabilityPayload,
+    ForecastHistoryResponse,
+    ForecastPayload,
     ForecastRecordResponse,
     InventoryPositionItem,
     InventoryRebalanceRequest,
@@ -22,6 +27,17 @@ from backend.models.schemas import (
 from backend.settings import get_settings
 
 settings = get_settings()
+
+
+@dataclass(slots=True)
+class LatestInventoryRow:
+    """Represents the latest stored inventory state for a product-region pair."""
+
+    snapshot_id: UUID
+    quantity: int
+    snapshot_date: date
+    product: Product
+    region: Region
 
 
 def build_async_database_url(database_url: str) -> str:
@@ -64,27 +80,129 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def _load_current_inventory_rows(
+def _latest_inventory_subquery():
+    """Builds a reusable subquery that ranks snapshots by recency."""
+
+    return (
+        select(
+            InventorySnapshot.id.label("snapshot_id"),
+            InventorySnapshot.product_id.label("product_id"),
+            InventorySnapshot.region_id.label("region_id"),
+            InventorySnapshot.quantity.label("quantity"),
+            InventorySnapshot.snapshot_date.label("snapshot_date"),
+            func.row_number()
+            .over(
+                partition_by=(InventorySnapshot.product_id, InventorySnapshot.region_id),
+                order_by=(InventorySnapshot.snapshot_date.desc(), InventorySnapshot.id.desc()),
+            )
+            .label("snapshot_rank"),
+        )
+        .subquery()
+    )
+
+
+def _derive_risk_level(quantity: int, reorder_point: int | None) -> str:
+    """Returns a compact risk label from inventory versus reorder point."""
+
+    if reorder_point is None or reorder_point <= 0:
+        return "low"
+    if quantity < reorder_point * 0.5:
+        return "critical"
+    if quantity < reorder_point:
+        return "high"
+    if quantity < reorder_point * 1.15:
+        return "medium"
+    return "low"
+
+
+def _snapshot_created_at(snapshot_date: date) -> datetime:
+    """Converts a snapshot date into a UTC timestamp for API payloads."""
+
+    return datetime.combine(snapshot_date, time.min, tzinfo=timezone.utc)
+
+
+async def _load_latest_inventory_rows(
     session: AsyncSession,
-    region_code: str | None = None,
-) -> list[tuple[InventorySnapshot, Product, Region, Supplier]]:
+    region_id: UUID | None = None,
+) -> list[LatestInventoryRow]:
     """Loads the latest inventory row for each product-region combination."""
 
+    latest_inventory = _latest_inventory_subquery()
     statement = (
-        select(InventorySnapshot, Product, Region, Supplier)
-        .join(Product, InventorySnapshot.product_id == Product.id)
-        .join(Region, InventorySnapshot.region_id == Region.id)
-        .join(Supplier, Product.supplier_id == Supplier.id)
-        .order_by(InventorySnapshot.snapshot_at.desc())
+        select(
+            latest_inventory.c.snapshot_id,
+            latest_inventory.c.quantity,
+            latest_inventory.c.snapshot_date,
+            Product,
+            Region,
+        )
+        .join(Product, latest_inventory.c.product_id == Product.id)
+        .join(Region, latest_inventory.c.region_id == Region.id)
+        .where(latest_inventory.c.snapshot_rank == 1)
+        .order_by(latest_inventory.c.snapshot_date.desc(), Product.name.asc(), Region.name.asc())
     )
-    if region_code is not None:
-        statement = statement.where(Region.region_code == region_code)
+    if region_id is not None:
+        statement = statement.where(latest_inventory.c.region_id == region_id)
 
     rows = (await session.execute(statement)).all()
-    latest_rows: dict[tuple[UUID, UUID], tuple[InventorySnapshot, Product, Region, Supplier]] = {}
-    for snapshot, product, region, supplier in rows:
-        latest_rows.setdefault((snapshot.product_id, snapshot.region_id), (snapshot, product, region, supplier))
-    return list(latest_rows.values())
+    return [
+        LatestInventoryRow(
+            snapshot_id=snapshot_id,
+            quantity=quantity,
+            snapshot_date=snapshot_date,
+            product=product,
+            region=region,
+        )
+        for snapshot_id, quantity, snapshot_date, product, region in rows
+    ]
+
+
+async def _load_latest_inventory_row(
+    session: AsyncSession,
+    *,
+    product_id: UUID,
+    region_id: UUID,
+) -> LatestInventoryRow | None:
+    """Loads the latest inventory row for a specific product-region pair."""
+
+    statement = (
+        select(InventorySnapshot, Product, Region)
+        .join(Product, InventorySnapshot.product_id == Product.id)
+        .join(Region, InventorySnapshot.region_id == Region.id)
+        .where(
+            InventorySnapshot.product_id == product_id,
+            InventorySnapshot.region_id == region_id,
+        )
+        .order_by(InventorySnapshot.snapshot_date.desc(), InventorySnapshot.id.desc())
+        .limit(1)
+    )
+    row = (await session.execute(statement)).first()
+    if row is None:
+        return None
+
+    snapshot, product, region = row
+    return LatestInventoryRow(
+        snapshot_id=snapshot.id,
+        quantity=snapshot.quantity,
+        snapshot_date=snapshot.snapshot_date,
+        product=product,
+        region=region,
+    )
+
+
+async def _build_region_filtered_supplier_statement(region_id: UUID):
+    """Builds a product filter for shipment aggregations scoped to a region."""
+
+    latest_inventory = _latest_inventory_subquery()
+    return (
+        select(latest_inventory.c.product_id)
+        .where(
+            latest_inventory.c.snapshot_rank == 1,
+            latest_inventory.c.region_id == region_id,
+        )
+        .distinct()
+        .subquery()
+    )
 
 
 async def get_inventory_context(
@@ -92,156 +210,212 @@ async def get_inventory_context(
     *,
     product_id: UUID,
     region_id: UUID,
-) -> tuple[InventorySnapshot, Product, Region, Supplier]:
+) -> LatestInventoryRow:
     """Returns the latest inventory context for a product-region pair."""
 
-    for snapshot, product, region, supplier in await _load_current_inventory_rows(session):
-        if product.id == product_id and region.id == region_id:
-            return snapshot, product, region, supplier
-    raise LookupError("Inventory context was not found for the requested product and region.")
+    context = await _load_latest_inventory_row(session, product_id=product_id, region_id=region_id)
+    if context is None:
+        raise LookupError("Inventory context was not found for the requested product and region.")
+    return context
 
 
 async def build_analytics_kpis(
     session: AsyncSession,
     *,
-    region_code: str | None = None,
+    region_id: UUID | None = None,
 ) -> list[KPI]:
     """Builds the analytics KPI collection from current inventory data."""
 
-    rows = await _load_current_inventory_rows(session, region_code=region_code)
-    total_inventory_units = sum(snapshot.quantity_on_hand for snapshot, *_ in rows)
-    total_reserved_units = sum(snapshot.quantity_reserved for snapshot, *_ in rows)
-    below_reorder = len([row for row in rows if row[0].quantity_on_hand + row[0].inbound_units < row[1].reorder_point])
-    average_cover = (
-        round(
-            sum(row[0].quantity_on_hand / max(row[1].base_daily_demand, 1) for row in rows) / len(rows),
-            1,
-        )
-        if rows
-        else 0.0
-    )
+    rows = await _load_latest_inventory_rows(session, region_id=region_id)
+    total_inventory_units = sum(row.quantity for row in rows)
+    at_risk_positions = sum(1 for row in rows if row.quantity < (row.product.reorder_point or 0))
+    tracked_products = len({row.product.id for row in rows})
+    average_units_per_position = round(total_inventory_units / len(rows), 1) if rows else 0.0
 
     return [
-        KPI(label="Inventory Units", value=total_inventory_units, change_note="Current on-hand inventory across active positions."),
-        KPI(label="Reserved Units", value=total_reserved_units, change_note="Units already committed to outbound demand."),
-        KPI(label="At-Risk Positions", value=below_reorder, change_note="Locations currently below modeled reorder thresholds."),
-        KPI(label="Avg. Days of Cover", value=average_cover, change_note="Average cover based on base daily demand.", unit="days"),
+        KPI(label="Inventory Units", value=total_inventory_units, change_note="Latest on-hand quantity across tracked positions."),
+        KPI(label="At-Risk Positions", value=at_risk_positions, change_note="Latest snapshots below each product reorder threshold."),
+        KPI(label="Tracked Products", value=tracked_products, change_note="Products represented in the latest inventory positions."),
+        KPI(label="Avg Units / Position", value=average_units_per_position, change_note="Average latest quantity across active positions.", unit="units"),
+    ]
+
+
+async def build_demand_series(
+    session: AsyncSession,
+    *,
+    region_id: UUID | None = None,
+    lookback_days: int = 30,
+) -> list[DemandPoint]:
+    """Builds a compact demand trend series from recent daily sales."""
+
+    start_date = date.today() - timedelta(days=lookback_days)
+    statement = (
+        select(DailySale.sale_date, func.sum(DailySale.units_sold).label("demand_units"))
+        .where(DailySale.sale_date >= start_date)
+        .group_by(DailySale.sale_date)
+        .order_by(DailySale.sale_date.desc())
+        .limit(6)
+    )
+    if region_id is not None:
+        statement = statement.where(DailySale.region_id == region_id)
+
+    rows = list(reversed((await session.execute(statement)).all()))
+    return [
+        DemandPoint(label=sale_date.strftime("%b %d"), demand_units=int(demand_units or 0))
+        for sale_date, demand_units in rows
     ]
 
 
 async def build_supplier_performance(
     session: AsyncSession,
     *,
-    region_code: str | None = None,
+    region_id: UUID | None = None,
 ) -> list[SupplierPerformanceItem]:
-    """Builds supplier performance metrics from current inventory state."""
+    """Builds shipment-truthful supplier performance metrics."""
 
-    rows = await _load_current_inventory_rows(session, region_code=region_code)
-    grouped: dict[UUID, list[tuple[InventorySnapshot, Product, Region, Supplier]]] = {}
-    for row in rows:
-        grouped.setdefault(row[3].id, []).append(row)
+    on_time_case = case(
+        (
+            and_(
+                SupplierShipment.status == "delivered",
+                SupplierShipment.actual_date.is_not(None),
+                SupplierShipment.expected_date.is_not(None),
+                SupplierShipment.actual_date <= SupplierShipment.expected_date,
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    statement = select(
+        SupplierShipment.supplier_name,
+        func.count(SupplierShipment.id).label("shipment_count"),
+        func.sum(case((SupplierShipment.status == "delivered", 1), else_=0)).label("delivered_count"),
+        func.sum(case((SupplierShipment.status == "delayed", 1), else_=0)).label("delayed_count"),
+        func.sum(case((SupplierShipment.status == "in_transit", 1), else_=0)).label("in_transit_count"),
+        func.sum(on_time_case).label("on_time_delivered_count"),
+    ).where(SupplierShipment.supplier_name.is_not(None))
+
+    if region_id is not None:
+        region_products = await _build_region_filtered_supplier_statement(region_id)
+        statement = statement.join(region_products, SupplierShipment.product_id == region_products.c.product_id)
+
+    statement = statement.group_by(SupplierShipment.supplier_name).order_by(SupplierShipment.supplier_name.asc())
+    rows = (await session.execute(statement)).all()
 
     items: list[SupplierPerformanceItem] = []
-    for supplier_rows in grouped.values():
-        supplier = supplier_rows[0][3]
-        reliability_score = float(supplier.reliability_score)
-        fill_rate_pct = round(
-            sum(
-                min((snapshot.quantity_on_hand + snapshot.inbound_units) / max(product.reorder_point, 1), 1.2)
-                for snapshot, product, *_ in supplier_rows
-            )
-            / len(supplier_rows)
-            * 100,
-            1,
-        )
-        risk_level = "critical" if reliability_score < 0.82 else "high" if reliability_score < 0.88 else "medium" if reliability_score < 0.93 else "low"
+    for supplier_name, shipment_count, delivered_count, delayed_count, in_transit_count, on_time_delivered_count in rows:
+        delivered_count = int(delivered_count or 0)
+        shipment_count = int(shipment_count or 0)
         items.append(
             SupplierPerformanceItem(
-                supplier_id=supplier.id,
-                supplier_code=supplier.supplier_code,
-                name=supplier.name,
-                reliability_score=reliability_score,
-                lead_time_days=supplier.lead_time_days,
-                active_products=len(supplier_rows),
-                fill_rate_pct=fill_rate_pct,
-                risk_level=risk_level,
+                supplier_name=str(supplier_name),
+                shipment_count=shipment_count,
+                delivered_count=delivered_count,
+                delayed_count=int(delayed_count or 0),
+                in_transit_count=int(in_transit_count or 0),
+                on_time_rate_pct=round((float(on_time_delivered_count or 0) / max(delivered_count, 1)) * 100, 1) if delivered_count else 0.0,
             )
         )
-
-    return sorted(items, key=lambda item: (item.risk_level, item.fill_rate_pct))
+    return items
 
 
 async def list_alerts(
     session: AsyncSession,
     *,
-    region_code: str | None = None,
+    region_id: UUID | None = None,
     severity: str | None = None,
     limit: int = 6,
 ) -> list[AlertItem]:
-    """Returns active alerts ordered by recency."""
+    """Returns derived low-stock alerts ordered by recency."""
 
-    statement = (
-        select(InventoryAlert, Product, Region)
-        .join(Product, InventoryAlert.product_id == Product.id)
-        .join(Region, InventoryAlert.region_id == Region.id)
-        .order_by(InventoryAlert.created_at.desc())
-    )
-    if region_code is not None:
-        statement = statement.where(Region.region_code == region_code)
-    if severity is not None:
-        statement = statement.where(InventoryAlert.severity == severity)
+    rows = await _load_latest_inventory_rows(session, region_id=region_id)
+    items: list[AlertItem] = []
+    for row in rows:
+        reorder_point = row.product.reorder_point or 0
+        if reorder_point <= 0 or row.quantity >= reorder_point:
+            continue
 
-    rows = (await session.execute(statement.limit(limit))).all()
-    return [
-        AlertItem(
-            alert_id=alert.id,
-            product_id=product.id,
-            region_id=region.id,
-            product_name=product.name,
-            region_name=region.name,
-            severity=alert.severity,
-            message=alert.message,
-            triggered_by=alert.triggered_by,
-            created_at=alert.created_at,
+        derived_severity = _derive_risk_level(row.quantity, reorder_point)
+        if severity is not None and derived_severity != severity:
+            continue
+
+        items.append(
+            AlertItem(
+                alert_id=row.snapshot_id,
+                product_id=row.product.id,
+                region_id=row.region.id,
+                product_name=row.product.name,
+                region_name=row.region.name,
+                severity=derived_severity,
+                message=f"{row.product.name} is below reorder threshold in {row.region.name}.",
+                triggered_by="reorder_point_threshold",
+                created_at=_snapshot_created_at(row.snapshot_date),
+            )
         )
-        for alert, product, region in rows
-    ]
+
+    return sorted(items, key=lambda item: item.created_at, reverse=True)[:limit]
 
 
 async def list_inventory_positions(
     session: AsyncSession,
     *,
-    region_code: str | None = None,
+    region_id: UUID | None = None,
     below_reorder_only: bool = False,
     limit: int = 25,
 ) -> list[InventoryPositionItem]:
     """Returns latest inventory positions with derived risk labels."""
 
-    rows = await _load_current_inventory_rows(session, region_code=region_code)
+    rows = await _load_latest_inventory_rows(session, region_id=region_id)
     items: list[InventoryPositionItem] = []
-    for snapshot, product, region, _supplier in rows:
-        available_units = snapshot.quantity_on_hand + snapshot.inbound_units - snapshot.quantity_reserved
-        if below_reorder_only and available_units >= product.reorder_point:
+    for row in rows:
+        reorder_point = row.product.reorder_point
+        if below_reorder_only and (reorder_point is None or row.quantity >= reorder_point):
             continue
-        days_of_cover = round(snapshot.quantity_on_hand / max(product.base_daily_demand, 1), 1)
-        risk_level = "critical" if available_units < product.reorder_point * 0.65 else "high" if available_units < product.reorder_point else "medium" if days_of_cover < 18 else "low"
+
         items.append(
             InventoryPositionItem(
-                product_id=product.id,
-                product_name=product.name,
-                sku=product.sku,
-                region_id=region.id,
-                region_name=region.name,
-                quantity_on_hand=snapshot.quantity_on_hand,
-                quantity_reserved=snapshot.quantity_reserved,
-                inbound_units=snapshot.inbound_units,
-                reorder_point=product.reorder_point,
-                days_of_cover=days_of_cover,
-                risk_level=risk_level,
+                product_id=row.product.id,
+                product_name=row.product.name,
+                sku=row.product.sku,
+                region_id=row.region.id,
+                region_name=row.region.name,
+                quantity=row.quantity,
+                snapshot_date=row.snapshot_date,
+                reorder_point=reorder_point,
+                risk_level=_derive_risk_level(row.quantity, reorder_point),
             )
         )
 
     return items[:limit]
+
+
+def _normalize_forecast_payload(payload: dict[str, object] | None) -> ForecastPayload:
+    """Normalizes forecast JSON into the typed response schema."""
+
+    return ForecastPayload.model_validate(
+        payload
+        or {
+            "horizon_days": 7,
+            "predictions": [],
+            "summary": {
+                "total_units": 0,
+                "avg_daily_units": 0.0,
+                "stockout_risk_pct": 0.0,
+                "recommended_reorder_units": 0,
+            },
+        }
+    )
+
+
+def _normalize_shap_payload(payload: dict[str, object] | None) -> ForecastExplainabilityPayload:
+    """Normalizes explanation JSON into the typed response schema."""
+
+    return ForecastExplainabilityPayload.model_validate(
+        payload
+        or {
+            "method": "feature_importance_proxy",
+            "top_features": [],
+        }
+    )
 
 
 def _to_forecast_response(record: ForecastRun, product: Product, region: Region) -> ForecastRecordResponse:
@@ -253,14 +427,9 @@ def _to_forecast_response(record: ForecastRun, product: Product, region: Region)
         region_id=region.id,
         product_name=product.name,
         region_name=region.name,
-        horizon_days=record.horizon_days,
-        predicted_demand_units=record.predicted_demand_units,
-        lower_bound_units=record.lower_bound_units,
-        upper_bound_units=record.upper_bound_units,
-        stockout_probability_pct=float(record.stockout_probability_pct),
-        recommended_reorder_units=record.recommended_reorder_units,
-        model_version=record.model_version,
-        generated_at=record.generated_at,
+        run_at=record.run_at or datetime.now(timezone.utc),
+        forecast_json=_normalize_forecast_payload(record.forecast_json),
+        shap_json=_normalize_shap_payload(record.shap_json),
     )
 
 
@@ -269,26 +438,16 @@ async def save_forecast_run(
     *,
     product: Product,
     region: Region,
-    horizon_days: int,
-    predicted_demand_units: int,
-    lower_bound_units: int,
-    upper_bound_units: int,
-    stockout_probability_pct: float,
-    recommended_reorder_units: int,
-    model_version: str,
+    forecast_json: dict[str, object],
+    shap_json: dict[str, object],
 ) -> ForecastRecordResponse:
     """Persists a generated forecast and returns the response schema."""
 
     record = ForecastRun(
         product_id=product.id,
         region_id=region.id,
-        horizon_days=horizon_days,
-        predicted_demand_units=predicted_demand_units,
-        lower_bound_units=lower_bound_units,
-        upper_bound_units=upper_bound_units,
-        stockout_probability_pct=stockout_probability_pct,
-        recommended_reorder_units=recommended_reorder_units,
-        model_version=model_version,
+        forecast_json=forecast_json,
+        shap_json=shap_json,
     )
     session.add(record)
     await session.commit()
@@ -309,7 +468,7 @@ async def get_latest_forecast(
         .join(Product, ForecastRun.product_id == Product.id)
         .join(Region, ForecastRun.region_id == Region.id)
         .where(ForecastRun.product_id == product_id, ForecastRun.region_id == region_id)
-        .order_by(ForecastRun.generated_at.desc())
+        .order_by(ForecastRun.run_at.desc(), ForecastRun.id.desc())
     )
     row = (await session.execute(statement)).first()
     if row is None:
@@ -327,53 +486,97 @@ async def get_forecast_history(session: AsyncSession, *, product_id: UUID) -> li
         .join(Product, ForecastRun.product_id == Product.id)
         .join(Region, ForecastRun.region_id == Region.id)
         .where(ForecastRun.product_id == product_id)
-        .order_by(ForecastRun.generated_at.desc())
+        .order_by(ForecastRun.run_at.desc(), ForecastRun.id.desc())
     )
     rows = (await session.execute(statement)).all()
     return [_to_forecast_response(record, product, region) for record, product, region in rows]
+
+
+async def _get_snapshot_for_date(
+    session: AsyncSession,
+    *,
+    product_id: UUID,
+    region_id: UUID,
+    snapshot_date: date,
+) -> InventorySnapshot | None:
+    """Returns the snapshot row for a specific product-region-date if it exists."""
+
+    statement = select(InventorySnapshot).where(
+        InventorySnapshot.product_id == product_id,
+        InventorySnapshot.region_id == region_id,
+        InventorySnapshot.snapshot_date == snapshot_date,
+    )
+    return (await session.execute(statement)).scalar_one_or_none()
 
 
 async def rebalance_inventory(
     session: AsyncSession,
     request: InventoryRebalanceRequest,
 ) -> InventoryRebalanceResponse:
-    """Creates post-transfer inventory snapshots for the source and target regions."""
+    """Creates or updates today's inventory snapshots for the source and target regions."""
 
-    source_snapshot, source_product, _source_region, _source_supplier = await get_inventory_context(
+    product = await session.get(Product, request.product_id)
+    source_region = await session.get(Region, request.source_region_id)
+    target_region = await session.get(Region, request.target_region_id)
+    if product is None or source_region is None or target_region is None:
+        raise LookupError("The requested product or region was not found.")
+
+    source_context = await _load_latest_inventory_row(
         session,
         product_id=request.product_id,
         region_id=request.source_region_id,
     )
-    target_snapshot, _target_product, _target_region, _target_supplier = await get_inventory_context(
+    if source_context is None:
+        raise LookupError("Inventory context was not found for the requested product and region.")
+
+    target_context = await _load_latest_inventory_row(
         session,
         product_id=request.product_id,
         region_id=request.target_region_id,
     )
 
-    available_units = source_snapshot.quantity_on_hand - source_snapshot.quantity_reserved
-    if request.quantity_units > available_units:
+    if request.quantity_units > source_context.quantity:
         raise ValueError("Requested transfer exceeds available source inventory.")
 
-    source_record = InventorySnapshot(
+    snapshot_date = date.today()
+    source_today = await _get_snapshot_for_date(
+        session,
         product_id=request.product_id,
         region_id=request.source_region_id,
-        quantity_on_hand=source_snapshot.quantity_on_hand - request.quantity_units,
-        quantity_reserved=source_snapshot.quantity_reserved,
-        inbound_units=source_snapshot.inbound_units,
+        snapshot_date=snapshot_date,
     )
-    target_record = InventorySnapshot(
+    target_today = await _get_snapshot_for_date(
+        session,
         product_id=request.product_id,
         region_id=request.target_region_id,
-        quantity_on_hand=target_snapshot.quantity_on_hand + request.quantity_units,
-        quantity_reserved=target_snapshot.quantity_reserved,
-        inbound_units=target_snapshot.inbound_units,
+        snapshot_date=snapshot_date,
     )
-    session.add_all([source_record, target_record])
+
+    if source_today is None:
+        source_today = InventorySnapshot(
+            product_id=request.product_id,
+            region_id=request.source_region_id,
+            quantity=source_context.quantity,
+            snapshot_date=snapshot_date,
+        )
+        session.add(source_today)
+    if target_today is None:
+        target_today = InventorySnapshot(
+            product_id=request.product_id,
+            region_id=request.target_region_id,
+            quantity=target_context.quantity if target_context is not None else 0,
+            snapshot_date=snapshot_date,
+        )
+        session.add(target_today)
+
+    source_today.quantity -= request.quantity_units
+    target_today.quantity += request.quantity_units
+
     await session.commit()
 
     return InventoryRebalanceResponse(
         generated_at=datetime.now(timezone.utc),
-        product_id=source_product.id,
+        product_id=product.id,
         source_region_id=request.source_region_id,
         target_region_id=request.target_region_id,
         quantity_units=request.quantity_units,
