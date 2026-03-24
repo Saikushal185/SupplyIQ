@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,13 +18,13 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
 def build_inventory_query(
-    region_code: Annotated[str | None, Query(min_length=2, max_length=32)] = None,
+    region_id: Annotated[UUID | None, Query()] = None,
     below_reorder_only: bool = False,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> InventoryQuery:
     """Builds the validated inventory query model."""
 
-    return InventoryQuery(region_code=region_code, below_reorder_only=below_reorder_only, limit=limit)
+    return InventoryQuery(region_id=region_id, below_reorder_only=below_reorder_only, limit=limit)
 
 
 @router.get("/positions", response_model=InventoryPositionResponse)
@@ -43,7 +44,7 @@ async def get_inventory_positions(
         generated_at=datetime.now(timezone.utc),
         items=await db_service.list_inventory_positions(
             session,
-            region_code=query.region_code,
+            region_id=query.region_id,
             below_reorder_only=query.below_reorder_only,
             limit=query.limit,
         ),
@@ -63,7 +64,7 @@ async def get_stockout_candidates(
         generated_at=datetime.now(timezone.utc),
         items=await db_service.list_inventory_positions(
             session,
-            region_code=query.region_code,
+            region_id=query.region_id,
             below_reorder_only=True,
             limit=query.limit,
         ),
