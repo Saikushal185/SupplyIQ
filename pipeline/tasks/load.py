@@ -2,89 +2,48 @@
 
 from __future__ import annotations
 
-import psycopg
-from prefect import task
+from typing import Any
+
+try:
+    import psycopg
+except ModuleNotFoundError:  # pragma: no cover - dependency exists in the runtime image
+    psycopg = None  # type: ignore[assignment]
+
+try:
+    from prefect import task
+except ModuleNotFoundError:  # pragma: no cover - lightweight fallback for local unit imports
+    def task(*_args, **_kwargs):
+        def decorator(func):
+            func.fn = func
+            return func
+        return decorator
 
 from pipeline.tasks.database import build_postgres_dsn, get_pipeline_database_url
 
 
-def _upsert_supplier(cursor: psycopg.Cursor[tuple[object, ...]], payload: dict[str, object]) -> object:
-    """Upserts a supplier row and returns its primary key."""
-
-    cursor.execute(
-        """
-        SELECT id
-        FROM suppliers
-        WHERE supplier_code = %s
-        """,
-        (payload["supplier_code"],),
-    )
-    existing = cursor.fetchone()
-    if existing is not None:
-        cursor.execute(
-            """
-            UPDATE suppliers
-            SET name = %s,
-                country = %s,
-                reliability_score = %s,
-                lead_time_days = %s
-            WHERE id = %s
-            """,
-            (
-                payload["name"],
-                payload["country"],
-                payload["reliability_score"],
-                payload["lead_time_days"],
-                existing[0],
-            ),
-        )
-        return existing[0]
-
-    cursor.execute(
-        """
-        INSERT INTO suppliers (supplier_code, name, country, reliability_score, lead_time_days)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id
-        """,
-        (
-            payload["supplier_code"],
-            payload["name"],
-            payload["country"],
-            payload["reliability_score"],
-            payload["lead_time_days"],
-        ),
-    )
-    created = cursor.fetchone()
-    if created is None:
-        raise RuntimeError("Supplier insert did not return an id.")
-    return created[0]
-
-
-def _upsert_region(cursor: psycopg.Cursor[tuple[object, ...]], payload: dict[str, object]) -> object:
+def _upsert_region(cursor: Any, payload: dict[str, object]) -> object:
     """Upserts a region row and returns its primary key."""
 
     cursor.execute(
         """
         SELECT id
         FROM regions
-        WHERE region_code = %s
+        WHERE name = %s
         """,
-        (payload["region_code"],),
+        (payload["name"],),
     )
     existing = cursor.fetchone()
     if existing is not None:
         cursor.execute(
             """
             UPDATE regions
-            SET name = %s,
-                market = %s,
-                risk_factor = %s
+            SET country = %s,
+                timezone = %s
             WHERE id = %s
             """,
             (
-                payload["name"],
-                payload["market"],
-                payload["risk_factor"],
+                payload["country"],
+                payload["timezone"],
                 existing[0],
             ),
         )
@@ -92,15 +51,14 @@ def _upsert_region(cursor: psycopg.Cursor[tuple[object, ...]], payload: dict[str
 
     cursor.execute(
         """
-        INSERT INTO regions (region_code, name, market, risk_factor)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO regions (name, country, timezone)
+        VALUES (%s, %s, %s)
         RETURNING id
         """,
         (
-            payload["region_code"],
             payload["name"],
-            payload["market"],
-            payload["risk_factor"],
+            payload["country"],
+            payload["timezone"],
         ),
     )
     created = cursor.fetchone()
@@ -109,11 +67,7 @@ def _upsert_region(cursor: psycopg.Cursor[tuple[object, ...]], payload: dict[str
     return created[0]
 
 
-def _upsert_product(
-    cursor: psycopg.Cursor[tuple[object, ...]],
-    payload: dict[str, object],
-    supplier_id: object,
-) -> object:
+def _upsert_product(cursor: Any, payload: dict[str, object]) -> object:
     """Upserts a product row and returns its primary key."""
 
     cursor.execute(
@@ -131,19 +85,15 @@ def _upsert_product(
             UPDATE products
             SET name = %s,
                 category = %s,
-                supplier_id = %s,
                 unit_cost = %s,
-                reorder_point = %s,
-                base_daily_demand = %s
+                reorder_point = %s
             WHERE id = %s
             """,
             (
                 payload["name"],
                 payload["category"],
-                supplier_id,
                 payload["unit_cost"],
                 payload["reorder_point"],
-                payload["base_daily_demand"],
                 existing[0],
             ),
         )
@@ -151,18 +101,16 @@ def _upsert_product(
 
     cursor.execute(
         """
-        INSERT INTO products (sku, name, category, supplier_id, unit_cost, reorder_point, base_daily_demand)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO products (sku, name, category, unit_cost, reorder_point)
+        VALUES (%s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
             payload["sku"],
             payload["name"],
             payload["category"],
-            supplier_id,
             payload["unit_cost"],
             payload["reorder_point"],
-            payload["base_daily_demand"],
         ),
     )
     created = cursor.fetchone()
@@ -171,27 +119,120 @@ def _upsert_product(
     return created[0]
 
 
-def _insert_alert(
-    cursor: psycopg.Cursor[tuple[object, ...]],
-    *,
-    product_id: object,
-    region_id: object,
-    payload: dict[str, object],
-) -> None:
-    """Inserts an alert row with explicit defaults required by direct SQL writes."""
+def _insert_inventory_snapshot(cursor: Any, payload: dict[str, object]) -> None:
+    """Upserts an inventory snapshot using the exact schema keys."""
 
     cursor.execute(
         """
-        INSERT INTO inventory_alerts (product_id, region_id, severity, message, triggered_by, acknowledged)
+        INSERT INTO inventory_snapshots (product_id, region_id, quantity, snapshot_date)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (product_id, region_id, snapshot_date)
+        DO UPDATE SET quantity = EXCLUDED.quantity
+        """,
+        (
+            payload["product_id"],
+            payload["region_id"],
+            payload["quantity"],
+            payload["snapshot_date"],
+        ),
+    )
+
+
+def _upsert_daily_sale(cursor: Any, payload: dict[str, object]) -> None:
+    """Upserts a daily sales row using product, region, and sale date as the seed key."""
+
+    cursor.execute(
+        """
+        SELECT id
+        FROM daily_sales
+        WHERE product_id = %s
+          AND region_id = %s
+          AND sale_date = %s
+        """,
+        (payload["product_id"], payload["region_id"], payload["sale_date"]),
+    )
+    existing = cursor.fetchone()
+    if existing is not None:
+        cursor.execute(
+            """
+            UPDATE daily_sales
+            SET units_sold = %s,
+                revenue = %s,
+                weather_temp = %s,
+                traffic_index = %s
+            WHERE id = %s
+            """,
+            (
+                payload["units_sold"],
+                payload["revenue"],
+                payload["weather_temp"],
+                payload["traffic_index"],
+                existing[0],
+            ),
+        )
+        return
+
+    cursor.execute(
+        """
+        INSERT INTO daily_sales (product_id, region_id, sale_date, units_sold, revenue, weather_temp, traffic_index)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            payload["product_id"],
+            payload["region_id"],
+            payload["sale_date"],
+            payload["units_sold"],
+            payload["revenue"],
+            payload["weather_temp"],
+            payload["traffic_index"],
+        ),
+    )
+
+
+def _upsert_supplier_shipment(cursor: Any, payload: dict[str, object]) -> None:
+    """Upserts a supplier shipment using product, supplier, and expected date as the seed key."""
+
+    cursor.execute(
+        """
+        SELECT id
+        FROM supplier_shipments
+        WHERE product_id = %s
+          AND supplier_name = %s
+          AND expected_date = %s
+        """,
+        (payload["product_id"], payload["supplier_name"], payload["expected_date"]),
+    )
+    existing = cursor.fetchone()
+    if existing is not None:
+        cursor.execute(
+            """
+            UPDATE supplier_shipments
+            SET actual_date = %s,
+                quantity = %s,
+                status = %s
+            WHERE id = %s
+            """,
+            (
+                payload["actual_date"],
+                payload["quantity"],
+                payload["status"],
+                existing[0],
+            ),
+        )
+        return
+
+    cursor.execute(
+        """
+        INSERT INTO supplier_shipments (product_id, supplier_name, expected_date, actual_date, quantity, status)
         VALUES (%s, %s, %s, %s, %s, %s)
         """,
         (
-            product_id,
-            region_id,
-            str(payload["severity"]),
-            str(payload["message"]),
-            str(payload["triggered_by"]),
-            False,
+            payload["product_id"],
+            payload["supplier_name"],
+            payload["expected_date"],
+            payload["actual_date"],
+            payload["quantity"],
+            payload["status"],
         ),
     )
 
@@ -200,51 +241,70 @@ def _insert_alert(
 def load_supply_data(transformed_data: dict[str, list[dict[str, object]]]) -> dict[str, int]:
     """Upserts seed data into PostgreSQL and returns load counts."""
 
-    counts = {"suppliers": 0, "regions": 0, "products": 0, "inventory": 0, "alerts": 0}
-    supplier_ids: dict[str, object] = {}
+    if psycopg is None:  # pragma: no cover - exercised only when dependency is absent
+        raise RuntimeError("psycopg must be installed to run pipeline database loads.")
+
+    counts = {
+        "regions": 0,
+        "products": 0,
+        "inventory_snapshots": 0,
+        "daily_sales": 0,
+        "supplier_shipments": 0,
+    }
     region_ids: dict[str, object] = {}
     product_ids: dict[str, object] = {}
     database_dsn = build_postgres_dsn(get_pipeline_database_url())
 
     with psycopg.connect(database_dsn) as connection:
         with connection.cursor() as cursor:
-            for payload in transformed_data["suppliers"]:
-                supplier_ids[str(payload["supplier_code"])] = _upsert_supplier(cursor, payload)
-                counts["suppliers"] += 1
-
             for payload in transformed_data["regions"]:
-                region_ids[str(payload["region_code"])] = _upsert_region(cursor, payload)
+                region_ids[str(payload["name"])] = _upsert_region(cursor, payload)
                 counts["regions"] += 1
 
             for payload in transformed_data["products"]:
-                supplier_id = supplier_ids[str(payload["supplier_code"])]
-                product_ids[str(payload["sku"])] = _upsert_product(cursor, payload, supplier_id)
+                product_ids[str(payload["sku"])] = _upsert_product(cursor, payload)
                 counts["products"] += 1
 
-            for payload in transformed_data["inventory"]:
-                cursor.execute(
-                    """
-                    INSERT INTO inventory_snapshots (product_id, region_id, quantity_on_hand, quantity_reserved, inbound_units)
-                    VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        product_ids[str(payload["sku"])],
-                        region_ids[str(payload["region_code"])],
-                        int(payload["quantity_on_hand"]),
-                        int(payload["quantity_reserved"]),
-                        int(payload["inbound_units"]),
-                    ),
-                )
-                counts["inventory"] += 1
-
-            for payload in transformed_data.get("alerts", []):
-                _insert_alert(
+            for payload in transformed_data["inventory_snapshots"]:
+                _insert_inventory_snapshot(
                     cursor,
-                    product_id=product_ids[str(payload["sku"])],
-                    region_id=region_ids[str(payload["region_code"])],
-                    payload=payload,
+                    {
+                        "product_id": product_ids[str(payload["sku"])],
+                        "region_id": region_ids[str(payload["region_name"])],
+                        "quantity": int(payload["quantity"]),
+                        "snapshot_date": str(payload["snapshot_date"]),
+                    },
                 )
-                counts["alerts"] += 1
+                counts["inventory_snapshots"] += 1
+
+            for payload in transformed_data["daily_sales"]:
+                _upsert_daily_sale(
+                    cursor,
+                    {
+                        "product_id": product_ids[str(payload["sku"])],
+                        "region_id": region_ids[str(payload["region_name"])],
+                        "sale_date": str(payload["sale_date"]),
+                        "units_sold": int(payload["units_sold"]),
+                        "revenue": payload["revenue"],
+                        "weather_temp": payload["weather_temp"],
+                        "traffic_index": payload["traffic_index"],
+                    },
+                )
+                counts["daily_sales"] += 1
+
+            for payload in transformed_data["supplier_shipments"]:
+                _upsert_supplier_shipment(
+                    cursor,
+                    {
+                        "product_id": product_ids[str(payload["sku"])],
+                        "supplier_name": str(payload["supplier_name"]),
+                        "expected_date": str(payload["expected_date"]) if payload["expected_date"] else None,
+                        "actual_date": str(payload["actual_date"]) if payload["actual_date"] else None,
+                        "quantity": int(payload["quantity"]) if payload["quantity"] is not None else None,
+                        "status": str(payload["status"]) if payload["status"] is not None else None,
+                    },
+                )
+                counts["supplier_shipments"] += 1
 
         connection.commit()
 
