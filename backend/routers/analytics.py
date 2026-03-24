@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,22 +18,22 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
 def build_analytics_query(
-    region_code: Annotated[str | None, Query(min_length=2, max_length=32)] = None,
+    region_id: Annotated[UUID | None, Query()] = None,
     lookback_days: Annotated[int, Query(ge=7, le=365)] = 30,
 ) -> AnalyticsQuery:
     """Builds the validated analytics query model."""
 
-    return AnalyticsQuery(region_code=region_code, lookback_days=lookback_days)
+    return AnalyticsQuery(region_id=region_id, lookback_days=lookback_days)
 
 
 def build_alert_query(
-    region_code: Annotated[str | None, Query(min_length=2, max_length=32)] = None,
+    region_id: Annotated[UUID | None, Query()] = None,
     severity: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 6,
 ) -> AlertQuery:
     """Builds the validated alert query model."""
 
-    return AlertQuery(region_code=region_code, severity=severity, limit=limit)
+    return AlertQuery(region_id=region_id, severity=severity, limit=limit)
 
 
 @router.get("/overview", response_model=AnalyticsOverviewResponse)
@@ -48,22 +49,15 @@ async def get_overview(
     if cached is not None:
         return AnalyticsOverviewResponse.model_validate(cached)
 
-    kpis = await db_service.build_analytics_kpis(session, region_code=query.region_code)
-    positions = await db_service.list_inventory_positions(session, region_code=query.region_code, limit=100)
-    base_demand = sum(max(int(item.quantity_on_hand / max(item.days_of_cover, 1)), 1) for item in positions)
-    demand_series = [
-        DemandPoint(
-            label=(datetime.now(timezone.utc) - timedelta(days=index * 7)).strftime("Wk %U"),
-            demand_units=int(base_demand * (0.92 + index * 0.03)),
-        )
-        for index in reversed(range(6))
-    ]
-
     response = AnalyticsOverviewResponse(
         generated_at=datetime.now(timezone.utc),
-        region_code=query.region_code,
-        kpis=kpis,
-        demand_series=demand_series,
+        region_id=query.region_id,
+        kpis=await db_service.build_analytics_kpis(session, region_id=query.region_id),
+        demand_series=await db_service.build_demand_series(
+            session,
+            region_id=query.region_id,
+            lookback_days=query.lookback_days,
+        ),
     )
     await cache_service.set_json(cache_key, response.model_dump())
     return response
@@ -84,7 +78,7 @@ async def get_supplier_performance(
 
     response = SupplierPerformanceResponse(
         generated_at=datetime.now(timezone.utc),
-        items=await db_service.build_supplier_performance(session, region_code=query.region_code),
+        items=await db_service.build_supplier_performance(session, region_id=query.region_id),
     )
     await cache_service.set_json(cache_key, response.model_dump())
     return response
@@ -107,7 +101,7 @@ async def get_alerts(
         generated_at=datetime.now(timezone.utc),
         items=await db_service.list_alerts(
             session,
-            region_code=query.region_code,
+            region_id=query.region_id,
             severity=query.severity,
             limit=query.limit,
         ),
