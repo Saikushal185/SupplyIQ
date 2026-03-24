@@ -24,20 +24,18 @@ export interface DemandPoint {
 
 export interface AnalyticsOverviewResponse {
   generated_at: string;
-  region_code: string | null;
+  region_id: string | null;
   kpis: KPI[];
   demand_series: DemandPoint[];
 }
 
 export interface SupplierPerformanceItem {
-  supplier_id: string;
-  supplier_code: string;
-  name: string;
-  reliability_score: number;
-  lead_time_days: number;
-  active_products: number;
-  fill_rate_pct: number;
-  risk_level: SeverityLevel;
+  supplier_name: string;
+  shipment_count: number;
+  delivered_count: number;
+  delayed_count: number;
+  in_transit_count: number;
+  on_time_rate_pct: number;
 }
 
 export interface SupplierPerformanceResponse {
@@ -68,11 +66,9 @@ export interface InventoryPositionItem {
   sku: string;
   region_id: string;
   region_name: string;
-  quantity_on_hand: number;
-  quantity_reserved: number;
-  inbound_units: number;
-  reorder_point: number;
-  days_of_cover: number;
+  quantity: number;
+  snapshot_date: string;
+  reorder_point: number | null;
   risk_level: SeverityLevel;
 }
 
@@ -84,7 +80,36 @@ export interface InventoryPositionResponse {
 export interface ForecastGenerateRequest {
   product_id: string;
   region_id: string;
+}
+
+export interface ForecastPredictionPoint {
+  date: string;
+  units: number;
+  lower: number;
+  upper: number;
+}
+
+export interface ForecastSummary {
+  total_units: number;
+  avg_daily_units: number;
+  stockout_risk_pct: number;
+  recommended_reorder_units: number;
+}
+
+export interface ForecastFeatureContribution {
+  feature: string;
+  contribution: number;
+}
+
+export interface ForecastPayload {
   horizon_days: number;
+  predictions: ForecastPredictionPoint[];
+  summary: ForecastSummary;
+}
+
+export interface ForecastExplainabilityPayload {
+  method: string;
+  top_features: ForecastFeatureContribution[];
 }
 
 export interface ForecastRecordResponse {
@@ -93,14 +118,9 @@ export interface ForecastRecordResponse {
   region_id: string;
   product_name: string;
   region_name: string;
-  horizon_days: number;
-  predicted_demand_units: number;
-  lower_bound_units: number;
-  upper_bound_units: number;
-  stockout_probability_pct: number;
-  recommended_reorder_units: number;
-  model_version: string;
-  generated_at: string;
+  run_at: string;
+  forecast_json: ForecastPayload;
+  shap_json: ForecastExplainabilityPayload;
 }
 
 export interface ForecastHistoryResponse {
