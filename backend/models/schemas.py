@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -22,14 +22,14 @@ class ApiError(BaseModel):
 class AnalyticsQuery(BaseModel):
     """Validates analytics overview requests."""
 
-    region_code: str | None = Field(default=None, min_length=2, max_length=32)
+    region_id: UUID | None = None
     lookback_days: int = Field(default=30, ge=7, le=365)
 
 
 class AlertQuery(BaseModel):
     """Validates alert listing requests."""
 
-    region_code: str | None = Field(default=None, min_length=2, max_length=32)
+    region_id: UUID | None = None
     severity: SeverityLevel | None = None
     limit: int = Field(default=6, ge=1, le=50)
 
@@ -37,7 +37,7 @@ class AlertQuery(BaseModel):
 class InventoryQuery(BaseModel):
     """Validates inventory listing requests."""
 
-    region_code: str | None = Field(default=None, min_length=2, max_length=32)
+    region_id: UUID | None = None
     below_reorder_only: bool = False
     limit: int = Field(default=25, ge=1, le=100)
 
@@ -47,7 +47,6 @@ class ForecastGenerateRequest(BaseModel):
 
     product_id: UUID
     region_id: UUID
-    horizon_days: int = Field(default=30, ge=1, le=90)
 
 
 class ForecastPathRequest(BaseModel):
@@ -92,22 +91,20 @@ class AnalyticsOverviewResponse(BaseModel):
     """Represents analytics overview data."""
 
     generated_at: datetime
-    region_code: str | None
+    region_id: UUID | None
     kpis: list[KPI]
     demand_series: list[DemandPoint]
 
 
 class SupplierPerformanceItem(BaseModel):
-    """Represents supplier performance metrics."""
+    """Represents supplier shipment performance metrics."""
 
-    supplier_id: UUID
-    supplier_code: str
-    name: str
-    reliability_score: float
-    lead_time_days: int
-    active_products: int
-    fill_rate_pct: float
-    risk_level: SeverityLevel
+    supplier_name: str
+    shipment_count: int
+    delivered_count: int
+    delayed_count: int
+    in_transit_count: int
+    on_time_rate_pct: float
 
 
 class SupplierPerformanceResponse(BaseModel):
@@ -118,7 +115,7 @@ class SupplierPerformanceResponse(BaseModel):
 
 
 class AlertItem(BaseModel):
-    """Represents an active inventory alert."""
+    """Represents a derived low-stock alert."""
 
     alert_id: UUID
     product_id: UUID
@@ -146,11 +143,9 @@ class InventoryPositionItem(BaseModel):
     sku: str
     region_id: UUID
     region_name: str
-    quantity_on_hand: int
-    quantity_reserved: int
-    inbound_units: int
-    reorder_point: int
-    days_of_cover: float
+    quantity: int
+    snapshot_date: date
+    reorder_point: int | None
     risk_level: SeverityLevel
 
 
@@ -172,6 +167,46 @@ class InventoryRebalanceResponse(BaseModel):
     status: str
 
 
+class ForecastPredictionPoint(BaseModel):
+    """Represents a single forecasted day."""
+
+    date: date
+    units: int
+    lower: int
+    upper: int
+
+
+class ForecastSummary(BaseModel):
+    """Represents forecast summary metrics."""
+
+    total_units: int
+    avg_daily_units: float
+    stockout_risk_pct: float
+    recommended_reorder_units: int
+
+
+class ForecastPayload(BaseModel):
+    """Represents the persisted forecast JSON payload."""
+
+    horizon_days: int
+    predictions: list[ForecastPredictionPoint]
+    summary: ForecastSummary
+
+
+class ForecastFeatureContribution(BaseModel):
+    """Represents a top feature contribution entry."""
+
+    feature: str
+    contribution: float
+
+
+class ForecastExplainabilityPayload(BaseModel):
+    """Represents the persisted explanation payload."""
+
+    method: str
+    top_features: list[ForecastFeatureContribution]
+
+
 class ForecastRecordResponse(BaseModel):
     """Represents a forecast result."""
 
@@ -182,14 +217,9 @@ class ForecastRecordResponse(BaseModel):
     region_id: UUID
     product_name: str
     region_name: str
-    horizon_days: int
-    predicted_demand_units: int
-    lower_bound_units: int
-    upper_bound_units: int
-    stockout_probability_pct: float
-    recommended_reorder_units: int
-    model_version: str
-    generated_at: datetime
+    run_at: datetime
+    forecast_json: ForecastPayload
+    shap_json: ForecastExplainabilityPayload
 
 
 class ForecastHistoryResponse(BaseModel):
