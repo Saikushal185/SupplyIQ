@@ -17,19 +17,22 @@ Prefect pipeline -> PostgreSQL + Redis -> FastAPI backend -> Next.js 14 frontend
 - [x] PostgreSQL + Redis infra in `infra/docker-compose.yml`
 - [x] Prefect pipeline in `pipeline/flows` + `pipeline/tasks`
 - [x] Repo-root `docker-compose.yml` preserved for `docker-compose up` from the root
-- [x] Regression coverage added for backend settings parsing and pipeline CLI entrypoints
-- [x] Clerk-aware frontend providers, session context, SWR data hooks, and middleware route protection in `frontend/components/providers`, `frontend/context`, `frontend/lib/hooks.ts`, and `frontend/middleware.ts`
-- [x] Backend Clerk JWT middleware with public `/api/v1/health` endpoint in `backend/middleware/auth.py`
-- [x] Frontend login flow updated to render Clerk Sign-In when env keys are present and a local-development guidance screen when they are not
-- [x] Frontend dashboard, analytics, and forecast pages now consume typed SWR hooks instead of page-local fetch logic
-- [x] Health checks now target `/api/v1/health` in both root and `infra/` Compose definitions
 - [x] Backend persistence migrated to async SQLAlchemy sessions in `backend/services/db_service.py`, `backend/dependencies.py`, and the API routers
 - [x] Backend Redis cache migrated to async `redis.asyncio` usage in `backend/services/cache_service.py`
-- [x] Forecast generation path now awaits the async persistence layer end to end in `backend/services/forecast_service.py`
-- [x] Pipeline PostgreSQL writes now use direct SQL through `pipeline/tasks/load.py` + `pipeline/tasks/database.py`
+- [x] Pipeline PostgreSQL writes now use direct SQL through `pipeline/tasks/load.py`
 - [x] Pipeline alert refresh now reads PostgreSQL directly and stores JSON in Redis from `pipeline/flows/alert_flow.py`
-- [x] Additional regression coverage added for async persistence contracts and raw SQL alert defaults
-- [x] Full Docker Compose stack verified locally: backend healthy, frontend serving, pipeline exits `0`
+- [x] Clerk-aware frontend providers, session context, SWR data hooks, and middleware route protection remain wired for optional auth
+- [x] Health checks target `/api/v1/health` in both root and `infra/` Compose definitions
+- [x] Exact six-table PostgreSQL schema replacement completed across ORM and bootstrap SQL:
+  `products`, `regions`, `inventory_snapshots`, `daily_sales`, `supplier_shipments`, and `forecast_runs`
+- [x] Raw bootstrap SQL in `infra/init.sql` now creates `pgcrypto`, the exact tables, the inventory uniqueness rule, and the required indexes
+- [x] Backend contracts, routers, and query logic now use `region_id`, latest inventory snapshots, derived stockout alerts, shipment-based supplier analytics, and JSON forecast persistence
+- [x] Forecast generation now always produces a 7-day `forecast_json` payload plus `shap_json` feature-contribution metadata
+- [x] Pipeline extract/transform/load now seeds only the exact-schema tables required by the new model
+- [x] Frontend dashboard, analytics, and forecast screens now render the new inventory, shipment, and forecast JSON shapes
+- [x] Regression coverage added for schema metadata, SQL bootstrap contents, async persistence behavior, and pipeline CLI entrypoints
+- [x] Frontend lint and production build verified locally after the schema transition
+- [x] Full Docker Compose stack verified locally against a fresh isolated volume: backend healthy, frontend serving, postgres healthy, redis running, pipeline exits `0`
 
 ## Critical decisions made (don't change these)
 - System flow is `Prefect -> PostgreSQL + Redis -> FastAPI -> Next.js`
@@ -44,12 +47,19 @@ Prefect pipeline -> PostgreSQL + Redis -> FastAPI backend -> Next.js 14 frontend
 - Pipeline direct DB clients must strip SQLAlchemy driver suffixes before connecting to PostgreSQL
 - Clerk auth remains optional in local development until env keys are set; when enabled, frontend middleware and backend bearer-token validation activate together
 - Public health and container readiness endpoint is `/api/v1/health`
-- Inventory alert inserts must set `acknowledged = false` explicitly when bypassing the ORM with raw SQL
-- Next.js remains pinned to the latest available 14.x release for this requirement, even though npm audit recommends a major upgrade beyond 14 to fully clear current upstream advisories
-- Local Docker Compose currently uses `postgres:16-alpine` to stay compatible with the existing local volume data; moving back to PostgreSQL 15 locally would require a deliberate volume reset or migration
+- Persistent application schema must remain exactly these six tables with no extra persisted tables or columns:
+  `products`, `regions`, `inventory_snapshots`, `daily_sales`, `supplier_shipments`, and `forecast_runs`
+- Inventory alerts are derived from the latest inventory snapshot versus `products.reorder_point`; they are not stored in a separate table
+- Forecast persistence is JSON-first: `forecast_runs.forecast_json` stores the 7-day forecast payload and `forecast_runs.shap_json` stores the top feature contributions
+- Supplier analytics are shipment-truthful and aggregate `supplier_shipments` by `supplier_name`
+- Root Docker Compose currently uses `postgres:16-alpine`; fresh bootstrap verification was completed with an isolated Compose project so `infra/init.sql` ran from an empty volume
+- `prefect==2.20.25` requires `sqlalchemy<2.0.36`, so `backend/requirements.txt` is intentionally pinned to `sqlalchemy==2.0.35`
 
 ## Current task for this session
-Async backend persistence and direct pipeline write migrations are complete. Next recommended task: rebuild the backend/pipeline images once external registry access is available so the updated Prefect 2.x pin in `backend/requirements.txt` is exercised by a fresh Docker image build, then rerun the full root `docker-compose up` verification path.
+Exact-schema replacement is implemented and verified. Next recommended task: add API-level smoke/regression coverage for the live `/inventory`, `/analytics`, and `/forecast` endpoints so the new `region_id` filters, derived alerts, shipment metrics, and JSON forecast payloads are exercised end to end.
+
+## Cleanup rule
+No test files should persist between sessions. Run CLEANUP.md prompt before closing every session.
 
 ---
 
@@ -59,14 +69,15 @@ Async backend persistence and direct pipeline write migrations are complete. Nex
 Here is my project context: [paste context.md]
 
 Here are the relevant existing files Codex needs to be aware of:
+- [paste backend/models/db_models.py]
 - [paste backend/models/schemas.py]
 - [paste backend/services/db_service.py]
-- [paste backend/services/cache_service.py]
-- [paste pipeline/tasks/database.py]
+- [paste backend/services/forecast_service.py]
 - [paste pipeline/tasks/load.py]
-- [paste backend/routers/forecast.py]
+- [paste pipeline/flows/alert_flow.py]
 - [paste backend/ml/predict.py]
 - [paste frontend/lib/api.ts]
+- [paste frontend/types/index.ts]
 
 Current task: [describe the next concrete feature, bugfix, or deployment hardening task for this session]
 
