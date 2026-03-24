@@ -35,32 +35,33 @@ export default function AnalyticsPage() {
     <div className="space-y-6">
       <div className="grid gap-6 xl:grid-cols-[1.1fr_minmax(0,1fr)]">
         <SectionCard
-          title="Supplier Fill Rate"
-          subtitle="Fill-rate performance by supplier across currently loaded inventory positions."
+          title="Supplier On-Time Rate"
+          subtitle="Shipment-truthful on-time delivery performance by supplier."
         >
           <SupplierPerformanceChart items={supplierPerformance.data.items} />
         </SectionCard>
 
         <SectionCard
-          title="Supplier Risk Register"
-          subtitle="Operational supplier view across reliability, lead time, and active product exposure."
+          title="Supplier Shipment Register"
+          subtitle="Operational supplier view across delivered, delayed, and in-transit shipment counts."
         >
           <div className="space-y-3">
             {supplierPerformance.data.items.map((item) => (
-              <div key={item.supplier_id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div key={item.supplier_name} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-medium text-white">{item.name}</p>
-                    <p className="text-sm text-slate-400">{item.supplier_code}</p>
+                    <p className="font-medium text-white">{item.supplier_name}</p>
+                    <p className="text-sm text-slate-400">{item.shipment_count} tracked shipments</p>
                   </div>
                   <span className="rounded-full bg-orange-400/15 px-3 py-1 text-xs uppercase tracking-[0.2em] text-orange-200">
-                    {item.risk_level}
+                    {item.on_time_rate_pct}% on time
                   </span>
                 </div>
-                <div className="mt-4 grid gap-3 text-sm text-slate-300 md:grid-cols-3">
-                  <p>Reliability: {item.reliability_score}</p>
-                  <p>Lead Time: {item.lead_time_days} days</p>
-                  <p>Fill Rate: {item.fill_rate_pct}%</p>
+                <div className="mt-4 grid gap-3 text-sm text-slate-300 md:grid-cols-4">
+                  <p>Delivered: {item.delivered_count}</p>
+                  <p>Delayed: {item.delayed_count}</p>
+                  <p>In Transit: {item.in_transit_count}</p>
+                  <p>On Time: {item.on_time_rate_pct}%</p>
                 </div>
               </div>
             ))}
@@ -86,8 +87,8 @@ export default function AnalyticsPage() {
               ),
             },
             { key: "region", header: "Region", render: (row) => row.region_name },
-            { key: "cover", header: "Days Cover", render: (row) => row.days_of_cover },
-            { key: "reserved", header: "Reserved", render: (row) => row.quantity_reserved },
+            { key: "quantity", header: "Quantity", render: (row) => row.quantity },
+            { key: "snapshot", header: "Snapshot", render: (row) => row.snapshot_date },
             { key: "reorder", header: "Reorder Point", render: (row) => row.reorder_point },
             { key: "risk", header: "Risk", render: (row) => row.risk_level },
           ]}
