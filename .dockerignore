@@ -1,0 +1,30 @@
+# VCS and local tooling
+.git
+.deps/
+.venv/
+.venv_verify/
+.vscode/
+.idea/
+.claude
+
+# Python caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+
+# Local model artifacts are regenerated in the backend image build
+backend/ml/artifacts/*
+!backend/ml/artifacts/.gitkeep
+
+# Local database and logs
+postgres_data/
+*.log
