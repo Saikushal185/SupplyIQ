@@ -1,15 +1,98 @@
-__pycache__/
-*.pyc
-.pytest_cache/
+# OS and editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment and secrets
 .env
 .env.local
-.next/
+.env.*.local
+backend/.env
+pipeline/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Python caches and virtualenvs
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.python-version
+.venv/
+.venv_verify/
+venv/
+env/
+ENV/
+
+# Next.js and Node artifacts
+node_modules/
 frontend/node_modules/
+.next/
 frontend/.next/
+out/
 frontend/out/
+*.tsbuildinfo
+
+# Logs and local runtime state
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.prefect/
+postgres_data/
+redis_data/
+
+# Local dependency sandboxes
+.deps/
+
+# ML artifacts
 backend/ml/artifacts/*
 !backend/ml/artifacts/.gitkeep
-postgres_data/
 
-# AI-specific ignores
+# AI / assistant local files
 .claude
+.codex/
+
+# Test, temp, and scratch files
+test_*.py
+*_test.py
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+test.py
+test.ts
+temp.py
+temp.ts
+scratch.py
+scratch.ts
+playground.py
+playground.ts
+debug.py
+debug.ts
+**/__tests__/**
+**/tests/**
+**/test/**
+**/temp/**
+**/scratch/**
+**/.sandbox/**
+*.ipynb
+!/notebooks/
+!/notebooks/**
