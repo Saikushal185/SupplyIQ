@@ -25,7 +25,6 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
   }));
 
   const [selectedScope, setSelectedScope] = useState<string>(scopes[0]?.key ?? "");
-  const [horizonDays, setHorizonDays] = useState<number>(30);
   const [latestForecast, setLatestForecast] = useState<ForecastRecordResponse | null>(null);
   const [history, setHistory] = useState<ForecastHistoryResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -47,7 +46,6 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
         {
           product_id: resolvedScope.productId,
           region_id: resolvedScope.regionId,
-          horizon_days: horizonDays,
         },
         token,
       );
@@ -66,7 +64,7 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
       <div className="rounded-3xl border border-white/10 bg-slate-950/50 p-5">
         <h3 className="text-lg font-semibold text-white">Generate Forecast</h3>
         <p className="mt-2 text-sm text-slate-400">
-          Select a product-region scope, choose a planning horizon, and persist a new model-backed forecast.
+          Select a product-region scope and persist a seven-day model-backed forecast with explanation details.
         </p>
 
         <label className="mt-5 block text-sm text-slate-300">
@@ -82,18 +80,6 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
               </option>
             ))}
           </select>
-        </label>
-
-        <label className="mt-4 block text-sm text-slate-300">
-          Horizon days
-          <input
-            type="number"
-            min={1}
-            max={90}
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-white"
-            value={horizonDays}
-            onChange={(event) => setHorizonDays(Number(event.target.value))}
-          />
         </label>
 
         <button
@@ -114,22 +100,20 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
           {latestForecast ? (
             <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <p className="text-sm text-slate-400">Predicted demand</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.predicted_demand_units}</p>
+                <p className="text-sm text-slate-400">7-day demand</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.forecast_json.summary.total_units}</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <p className="text-sm text-slate-400">Confidence band</p>
-                <p className="mt-2 text-2xl font-semibold text-white">
-                  {latestForecast.lower_bound_units} - {latestForecast.upper_bound_units}
-                </p>
+                <p className="text-sm text-slate-400">Avg Daily Units</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.forecast_json.summary.avg_daily_units}</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p className="text-sm text-slate-400">Stockout probability</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.stockout_probability_pct}%</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.forecast_json.summary.stockout_risk_pct}%</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p className="text-sm text-slate-400">Recommended reorder</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.recommended_reorder_units}</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.forecast_json.summary.recommended_reorder_units}</p>
               </div>
             </div>
           ) : (
@@ -147,27 +131,35 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
                     <div>
                       <p className="font-medium text-white">{item.product_name}</p>
                       <p className="text-sm text-slate-400">
-                        {item.region_name} - {item.horizon_days} day horizon
+                        {item.region_name} - {item.forecast_json.horizon_days} day horizon
                       </p>
                     </div>
                     <div className="text-right">
                       <p className="text-sm text-slate-400">Generated</p>
-                      <p className="text-sm text-white">{new Date(item.generated_at).toLocaleString()}</p>
+                      <p className="text-sm text-white">{new Date(item.run_at).toLocaleString()}</p>
                     </div>
                   </div>
                   <div className="mt-4 grid gap-3 md:grid-cols-3">
                     <div>
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Demand</p>
-                      <p className="mt-1 text-lg font-semibold text-white">{item.predicted_demand_units}</p>
+                      <p className="mt-1 text-lg font-semibold text-white">{item.forecast_json.summary.total_units}</p>
                     </div>
                     <div>
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Reorder</p>
-                      <p className="mt-1 text-lg font-semibold text-white">{item.recommended_reorder_units}</p>
+                      <p className="mt-1 text-lg font-semibold text-white">{item.forecast_json.summary.recommended_reorder_units}</p>
                     </div>
                     <div>
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Risk</p>
-                      <p className="mt-1 text-lg font-semibold text-white">{item.stockout_probability_pct}%</p>
+                      <p className="mt-1 text-lg font-semibold text-white">{item.forecast_json.summary.stockout_risk_pct}%</p>
                     </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {item.shap_json.top_features.slice(0, 4).map((feature) => (
+                      <div key={`${item.forecast_id}-${feature.feature}`} className="rounded-xl border border-white/10 bg-slate-900/40 p-3">
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{feature.feature}</p>
+                        <p className="mt-1 text-sm font-medium text-white">{feature.contribution}</p>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ))}
