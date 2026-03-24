@@ -18,38 +18,43 @@ def build_training_data(seed: int = 42, sample_size: int = 720) -> tuple[np.ndar
     """Builds deterministic synthetic training data for demand forecasting."""
 
     rng = np.random.default_rng(seed)
-    base_daily_demand = rng.integers(12, 190, sample_size)
-    quantity_on_hand = rng.integers(80, 3200, sample_size)
-    quantity_reserved = rng.integers(0, 400, sample_size)
-    inbound_units = rng.integers(0, 900, sample_size)
-    reorder_point = rng.integers(50, 1200, sample_size)
+    current_quantity = rng.integers(60, 2600, sample_size)
+    reorder_point = rng.integers(80, 1200, sample_size)
     unit_cost = rng.uniform(4, 380, sample_size)
-    supplier_reliability = rng.uniform(0.75, 0.99, sample_size)
-    supplier_lead_time = rng.integers(4, 28, sample_size)
-    region_risk_factor = rng.uniform(0.2, 0.95, sample_size)
-    horizon_days = rng.integers(7, 91, sample_size)
+    avg_units_sold_7d = rng.uniform(10, 210, sample_size)
+    avg_units_sold_30d = rng.uniform(8, 190, sample_size)
+    total_revenue_30d = rng.uniform(5_000, 120_000, sample_size)
+    avg_weather_temp_30d = rng.uniform(18, 103, sample_size)
+    avg_traffic_index_30d = rng.uniform(0.05, 0.98, sample_size)
+    incoming_shipment_units_7d = rng.integers(0, 1200, sample_size)
+    delayed_shipment_units = rng.integers(0, 420, sample_size)
 
     features = np.column_stack(
         [
-            base_daily_demand,
-            quantity_on_hand,
-            quantity_reserved,
-            inbound_units,
+            current_quantity,
             reorder_point,
             unit_cost,
-            supplier_reliability,
-            supplier_lead_time,
-            region_risk_factor,
-            horizon_days,
+            avg_units_sold_7d,
+            avg_units_sold_30d,
+            total_revenue_30d,
+            avg_weather_temp_30d,
+            avg_traffic_index_30d,
+            incoming_shipment_units_7d,
+            delayed_shipment_units,
         ]
     )
 
     demand_target = (
-        base_daily_demand * horizon_days * (1.01 + (1 - supplier_reliability) * 0.08)
-        + region_risk_factor * 40
-        + np.maximum(quantity_reserved - inbound_units, 0) * 0.18
-        + supplier_lead_time * 1.5
-        + rng.normal(0, 28, sample_size)
+        avg_units_sold_7d * 4.9
+        + avg_units_sold_30d * 1.8
+        + incoming_shipment_units_7d * 0.04
+        + delayed_shipment_units * 0.06
+        + avg_traffic_index_30d * 120
+        + np.maximum(reorder_point - current_quantity, 0) * 0.09
+        + unit_cost * 0.25
+        + avg_weather_temp_30d * 0.6
+        + total_revenue_30d / 1800
+        + rng.normal(0, 18, sample_size)
     )
 
     return features, demand_target
@@ -70,7 +75,7 @@ def persist_model() -> Path:
     artifact = {
         "model": model,
         "feature_names": FEATURE_NAMES,
-        "version": "2026.03.22",
+        "version": "2026.03.24",
     }
     joblib.dump(artifact, ARTIFACT_PATH)
     return ARTIFACT_PATH
