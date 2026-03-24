@@ -96,9 +96,9 @@ export default function DashboardPage() {
               ),
             },
             { key: "region", header: "Region", render: (row) => row.region_name },
-            { key: "onhand", header: "On Hand", render: (row) => row.quantity_on_hand },
-            { key: "inbound", header: "Inbound", render: (row) => row.inbound_units },
-            { key: "cover", header: "Days Cover", render: (row) => row.days_of_cover },
+            { key: "quantity", header: "Quantity", render: (row) => row.quantity },
+            { key: "snapshot", header: "Snapshot", render: (row) => row.snapshot_date },
+            { key: "reorder", header: "Reorder Point", render: (row) => row.reorder_point },
             { key: "risk", header: "Risk", render: (row) => row.risk_level },
           ]}
         />
