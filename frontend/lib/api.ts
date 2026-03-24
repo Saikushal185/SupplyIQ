@@ -49,15 +49,15 @@ async function request<T>(path: string, init?: RequestInit, token?: string | nul
 }
 
 export function fetchAnalyticsOverview(regionCode?: string, token?: string | null): Promise<AnalyticsOverviewResponse> {
-  return request<AnalyticsOverviewResponse>(`/analytics/overview${buildQuery({ region_code: regionCode })}`, undefined, token);
+  return request<AnalyticsOverviewResponse>(`/analytics/overview${buildQuery({ region_id: regionCode })}`, undefined, token);
 }
 
 export function fetchSupplierPerformance(regionCode?: string, token?: string | null): Promise<SupplierPerformanceResponse> {
-  return request<SupplierPerformanceResponse>(`/analytics/supplier-performance${buildQuery({ region_code: regionCode })}`, undefined, token);
+  return request<SupplierPerformanceResponse>(`/analytics/supplier-performance${buildQuery({ region_id: regionCode })}`, undefined, token);
 }
 
 export function fetchAlerts(regionCode?: string, token?: string | null): Promise<AlertListResponse> {
-  return request<AlertListResponse>(`/analytics/alerts${buildQuery({ region_code: regionCode })}`, undefined, token);
+  return request<AlertListResponse>(`/analytics/alerts${buildQuery({ region_id: regionCode })}`, undefined, token);
 }
 
 export function fetchInventoryPositions(
@@ -66,7 +66,7 @@ export function fetchInventoryPositions(
   token?: string | null,
 ): Promise<InventoryPositionResponse> {
   return request<InventoryPositionResponse>(
-    `/inventory/positions${buildQuery({ region_code: regionCode, below_reorder_only: belowReorderOnly })}`,
+    `/inventory/positions${buildQuery({ region_id: regionCode, below_reorder_only: belowReorderOnly })}`,
     undefined,
     token,
   );
@@ -74,7 +74,7 @@ export function fetchInventoryPositions(
 
 export function fetchStockouts(regionCode?: string, token?: string | null): Promise<InventoryPositionResponse> {
   return request<InventoryPositionResponse>(
-    `/inventory/stockouts${buildQuery({ region_code: regionCode, below_reorder_only: true })}`,
+    `/inventory/stockouts${buildQuery({ region_id: regionCode, below_reorder_only: true })}`,
     undefined,
     token,
   );
