@@ -22,13 +22,13 @@ export function SupplierPerformanceChart({ items }: SupplierPerformanceChartProp
     },
     yAxis: {
       type: "category",
-      data: items.map((item) => item.name),
+      data: items.map((item) => item.supplier_name),
       axisLabel: { color: "#cbd5e1" },
     },
     series: [
       {
         type: "bar",
-        data: items.map((item) => item.fill_rate_pct),
+        data: items.map((item) => item.on_time_rate_pct),
         itemStyle: { color: "#f4a261", borderRadius: [6, 6, 6, 6] },
       },
     ],
