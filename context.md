@@ -55,6 +55,14 @@ Prefect pipeline -> PostgreSQL + Redis -> FastAPI backend -> Next.js 14 frontend
 - Root Docker Compose currently uses `postgres:16-alpine`; fresh bootstrap verification was completed with an isolated Compose project so `infra/init.sql` ran from an empty volume
 - `prefect==2.20.25` requires `sqlalchemy<2.0.36`, so `backend/requirements.txt` is intentionally pinned to `sqlalchemy==2.0.35`
 
+## ML Model Architecture (confirmed)
+- One Prophet model trained per `(product_id, region_id)` pair
+- Artifacts: `backend/ml/artifacts/prophet_{product_id}_{region_id}.joblib`
+- One XGBoost residual model (global, trained on all product-region data)
+- Training window: full 2-year history
+- Inference window: last 90 days for feature matrix only
+- If prophet artifact missing for a pair -> HTTP 404, don't silently fail
+
 ## Current task for this session
 Exact-schema replacement is implemented and verified. Next recommended task: add API-level smoke/regression coverage for the live `/inventory`, `/analytics`, and `/forecast` endpoints so the new `region_id` filters, derived alerts, shipment metrics, and JSON forecast payloads are exercised end to end.
 
