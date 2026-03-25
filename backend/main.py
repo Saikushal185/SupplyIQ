@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     await initialize_database()
     app.state.cache_service = CacheService()
-    app.state.forecast_service = ForecastService(settings.model_artifact_path)
+    app.state.forecast_service = ForecastService()
     logger.info("SupplyIQ backend initialized.")
     try:
         yield
