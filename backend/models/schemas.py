@@ -171,6 +171,9 @@ class ForecastPredictionPoint(BaseModel):
     """Represents a single forecasted day."""
 
     date: date
+    predicted_units: int | None = None
+    lower_bound: int | None = None
+    upper_bound: int | None = None
     units: int
     lower: int
     upper: int
@@ -198,6 +201,8 @@ class ForecastFeatureContribution(BaseModel):
 
     feature: str
     contribution: float
+    value: float | None = None
+    direction: Literal["up", "down"] | None = None
 
 
 class ForecastExplainabilityPayload(BaseModel):
