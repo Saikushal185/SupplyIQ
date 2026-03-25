@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+import logging
 
 try:
     from prefect import flow
@@ -25,7 +26,14 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - dependency exists in the runtime image
     Redis = None  # type: ignore[assignment]
 
+try:
+    import httpx
+except ModuleNotFoundError:  # pragma: no cover - dependency exists in the runtime image
+    httpx = None  # type: ignore[assignment]
+
 from pipeline.tasks.database import build_postgres_dsn
+
+logger = logging.getLogger(__name__)
 
 
 def refresh_alert_cache() -> dict[str, object]:
@@ -93,6 +101,49 @@ def run_alert_cli() -> dict[str, object]:
     """Runs alert refresh without starting the Prefect orchestration engine."""
 
     return refresh_alert_cache()
+
+
+async def send_stockout_risk_email(
+    *,
+    recipient_email: str,
+    product_name: str,
+    region_name: str,
+    stockout_date: str,
+    current_stock_level: int,
+) -> bool:
+    """Sends a stockout alert email through Resend for forecast-triggered risks."""
+
+    if httpx is None:  # pragma: no cover - exercised only when dependency is absent
+        raise RuntimeError("httpx must be installed to send stockout alert emails.")
+
+    resend_api_key = os.getenv("BACKEND_RESEND_API_KEY") or os.getenv("RESEND_API_KEY")
+    resend_from_email = os.getenv("BACKEND_RESEND_FROM_EMAIL") or os.getenv("RESEND_FROM_EMAIL")
+    if not resend_api_key or not resend_from_email or not recipient_email:
+        logger.warning("Skipping stockout alert email because Resend is not fully configured.")
+        return False
+
+    payload = {
+        "from": resend_from_email,
+        "to": [recipient_email],
+        "subject": f"⚠️ SupplyIQ Stockout Risk: {product_name} in {region_name}",
+        "text": (
+            f"SupplyIQ detected a stockout risk for {product_name} in {region_name}.\n"
+            f"Predicted stockout date: {stockout_date}\n"
+            f"Current stock level: {current_stock_level} units"
+        ),
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+    return True
 
 
 if __name__ == "__main__":
