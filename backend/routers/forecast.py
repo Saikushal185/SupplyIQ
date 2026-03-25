@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.dependencies import get_db, get_forecast_service
+from backend.dependencies import get_current_user_email, get_db, get_forecast_service
 from backend.models.schemas import ForecastGenerateRequest, ForecastHistoryResponse, ForecastPathRequest, ForecastRecordResponse, ProductPathRequest
 from backend.services import db_service
 from backend.services.forecast_service import ForecastService
@@ -39,13 +39,18 @@ async def generate_forecast(
     payload: ForecastGenerateRequest,
     session: Annotated[AsyncSession, Depends(get_db)],
     forecast_service: Annotated[ForecastService, Depends(get_forecast_service)],
+    user_email: Annotated[str | None, Depends(get_current_user_email)],
 ) -> ForecastRecordResponse:
     """Generates and persists a new forecast."""
 
     try:
-        return await forecast_service.generate_forecast(session, payload)
+        return await forecast_service.generate_forecast(session, payload, user_email=user_email)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/latest/{product_id}/{region_id}", response_model=ForecastRecordResponse)
