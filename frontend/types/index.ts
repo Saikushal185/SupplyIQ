@@ -1,4 +1,15 @@
 export type SeverityLevel = "low" | "medium" | "high" | "critical";
+export type UserRole = "admin" | "analyst" | "viewer";
+
+export interface ApiMeta {
+  timestamp: string;
+  cached: boolean;
+}
+
+export interface ApiResponse<T> {
+  data: T;
+  meta: ApiMeta;
+}
 
 export interface SessionSnapshot {
   isLoaded: boolean;
@@ -6,61 +17,15 @@ export interface SessionSnapshot {
   userId: string | null;
   displayName: string;
   primaryEmail: string | null;
+  role: UserRole;
   roleLabel: string;
+  canViewForecast: boolean;
+  canGenerateForecast: boolean;
+  canViewPipeline: boolean;
   getToken: () => Promise<string | null>;
 }
 
-export interface KPI {
-  label: string;
-  value: number;
-  unit: string;
-  change_note: string;
-}
-
-export interface DemandPoint {
-  label: string;
-  demand_units: number;
-}
-
-export interface AnalyticsOverviewResponse {
-  generated_at: string;
-  region_id: string | null;
-  kpis: KPI[];
-  demand_series: DemandPoint[];
-}
-
-export interface SupplierPerformanceItem {
-  supplier_name: string;
-  shipment_count: number;
-  delivered_count: number;
-  delayed_count: number;
-  in_transit_count: number;
-  on_time_rate_pct: number;
-}
-
-export interface SupplierPerformanceResponse {
-  generated_at: string;
-  items: SupplierPerformanceItem[];
-}
-
-export interface AlertItem {
-  alert_id: string;
-  product_id: string;
-  region_id: string;
-  product_name: string;
-  region_name: string;
-  severity: SeverityLevel;
-  message: string;
-  triggered_by: string;
-  created_at: string;
-}
-
-export interface AlertListResponse {
-  generated_at: string;
-  items: AlertItem[];
-}
-
-export interface InventoryPositionItem {
+export interface InventorySummaryItem {
   product_id: string;
   product_name: string;
   sku: string;
@@ -72,9 +37,71 @@ export interface InventoryPositionItem {
   risk_level: SeverityLevel;
 }
 
-export interface InventoryPositionResponse {
-  generated_at: string;
-  items: InventoryPositionItem[];
+export interface InventoryHistoryItem {
+  region_id: string;
+  region_name: string;
+  snapshot_date: string;
+  quantity: number;
+}
+
+export interface SalesAnalyticsItem {
+  region_id: string;
+  region_name: string;
+  sale_date: string;
+  units_sold: number;
+  revenue: number;
+}
+
+export interface AnalyticsFilterOptionRegion {
+  region_id: string;
+  region_name: string;
+}
+
+export interface AnalyticsFilterOptionProduct {
+  product_id: string;
+  product_name: string;
+  sku: string;
+  category: string;
+}
+
+export interface AnalyticsFilterOptions {
+  regions: AnalyticsFilterOptionRegion[];
+  products: AnalyticsFilterOptionProduct[];
+  categories: string[];
+}
+
+export interface DemandPoint {
+  label: string;
+  demand_units: number;
+}
+
+export interface InventoryTurnoverItem {
+  product_id: string;
+  product_name: string;
+  sku: string;
+  cost_of_goods: number;
+  average_inventory_value: number;
+  turnover_ratio: number;
+}
+
+export interface SupplierReliabilityItem {
+  supplier_name: string;
+  shipment_count: number;
+  delivered_count: number;
+  on_time_deliveries: number;
+  on_time_rate_pct: number;
+}
+
+export type SupplierPerformanceItem = SupplierReliabilityItem;
+
+export interface RegionalGrowthItem {
+  region_id: string;
+  region_name: string;
+  current_month: string;
+  previous_month: string | null;
+  revenue: number;
+  previous_revenue: number;
+  growth_pct: number;
 }
 
 export interface ForecastGenerateRequest {
@@ -84,6 +111,9 @@ export interface ForecastGenerateRequest {
 
 export interface ForecastPredictionPoint {
   date: string;
+  predicted_units?: number;
+  lower_bound?: number;
+  upper_bound?: number;
   units: number;
   lower: number;
   upper: number;
@@ -99,6 +129,8 @@ export interface ForecastSummary {
 export interface ForecastFeatureContribution {
   feature: string;
   contribution: number;
+  value?: number | null;
+  direction?: "up" | "down" | null;
 }
 
 export interface ForecastPayload {
@@ -123,23 +155,14 @@ export interface ForecastRecordResponse {
   shap_json: ForecastExplainabilityPayload;
 }
 
-export interface ForecastHistoryResponse {
-  generated_at: string;
-  items: ForecastRecordResponse[];
-}
-
-export interface InventoryRebalanceRequest {
-  source_region_id: string;
-  target_region_id: string;
-  product_id: string;
-  quantity_units: number;
-}
-
-export interface InventoryRebalanceResponse {
-  generated_at: string;
-  product_id: string;
-  source_region_id: string;
-  target_region_id: string;
-  quantity_units: number;
-  status: string;
+export interface PipelineStatusItem {
+  flow_run_id: string | null;
+  flow_name: string | null;
+  deployment_id: string | null;
+  deployment_name: string | null;
+  state_type: string | null;
+  state_name: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  next_scheduled_run_time?: string | null;
 }
