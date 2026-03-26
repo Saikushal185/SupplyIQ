@@ -1,13 +1,15 @@
 import type {
-  AlertListResponse,
-  AnalyticsOverviewResponse,
+  AnalyticsFilterOptions,
+  ApiResponse,
   ForecastGenerateRequest,
-  ForecastHistoryResponse,
   ForecastRecordResponse,
-  InventoryPositionResponse,
-  InventoryRebalanceRequest,
-  InventoryRebalanceResponse,
-  SupplierPerformanceResponse,
+  InventoryHistoryItem,
+  InventorySummaryItem,
+  InventoryTurnoverItem,
+  PipelineStatusItem,
+  RegionalGrowthItem,
+  SalesAnalyticsItem,
+  SupplierReliabilityItem,
 } from "@/types";
 
 const API_BASE_URL =
@@ -15,7 +17,6 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   "http://localhost:8000/api/v1";
 
-/** Builds a query string while keeping undefined values out of the request. */
 function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -28,8 +29,7 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return query ? `?${query}` : "";
 }
 
-/** Sends a typed HTTP request to the backend API. */
-async function request<T>(path: string, init?: RequestInit, token?: string | null): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, token?: string | null): Promise<ApiResponse<T>> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
@@ -41,46 +41,86 @@ async function request<T>(path: string, init?: RequestInit, token?: string | nul
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `API request failed: ${response.status}`);
+    const rawBody = await response.text();
+    if (rawBody) {
+      try {
+        const body = JSON.parse(rawBody) as { detail?: string };
+        if (body.detail) {
+          throw new Error(body.detail);
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message !== rawBody) {
+          throw error;
+        }
+        throw new Error(rawBody);
+      }
+    }
+    throw new Error(`API request failed: ${response.status}`);
   }
 
-  return (await response.json()) as T;
+  return (await response.json()) as ApiResponse<T>;
 }
 
-export function fetchAnalyticsOverview(regionCode?: string, token?: string | null): Promise<AnalyticsOverviewResponse> {
-  return request<AnalyticsOverviewResponse>(`/analytics/overview${buildQuery({ region_id: regionCode })}`, undefined, token);
+export function fetchInventorySummary(regionId?: string, token?: string | null): Promise<ApiResponse<InventorySummaryItem[]>> {
+  return request<InventorySummaryItem[]>(`/inventory/summary${buildQuery({ region_id: regionId })}`, undefined, token);
 }
 
-export function fetchSupplierPerformance(regionCode?: string, token?: string | null): Promise<SupplierPerformanceResponse> {
-  return request<SupplierPerformanceResponse>(`/analytics/supplier-performance${buildQuery({ region_id: regionCode })}`, undefined, token);
-}
-
-export function fetchAlerts(regionCode?: string, token?: string | null): Promise<AlertListResponse> {
-  return request<AlertListResponse>(`/analytics/alerts${buildQuery({ region_id: regionCode })}`, undefined, token);
-}
-
-export function fetchInventoryPositions(
-  regionCode?: string,
-  belowReorderOnly = false,
+export function fetchInventoryHistory(
+  productId: string,
   token?: string | null,
-): Promise<InventoryPositionResponse> {
-  return request<InventoryPositionResponse>(
-    `/inventory/positions${buildQuery({ region_id: regionCode, below_reorder_only: belowReorderOnly })}`,
+): Promise<ApiResponse<InventoryHistoryItem[]>> {
+  return request<InventoryHistoryItem[]>(`/inventory/${productId}/history`, undefined, token);
+}
+
+export function fetchLowStock(regionId?: string, token?: string | null): Promise<ApiResponse<InventorySummaryItem[]>> {
+  return request<InventorySummaryItem[]>(`/inventory/low-stock${buildQuery({ region_id: regionId })}`, undefined, token);
+}
+
+export function fetchSalesAnalytics(
+  params?: { startDate?: string; endDate?: string; regionId?: string },
+  token?: string | null,
+): Promise<ApiResponse<SalesAnalyticsItem[]>> {
+  return request<SalesAnalyticsItem[]>(
+    `/analytics/sales${buildQuery({
+      start_date: params?.startDate,
+      end_date: params?.endDate,
+      region_id: params?.regionId,
+    })}`,
     undefined,
     token,
   );
 }
 
-export function fetchStockouts(regionCode?: string, token?: string | null): Promise<InventoryPositionResponse> {
-  return request<InventoryPositionResponse>(
-    `/inventory/stockouts${buildQuery({ region_id: regionCode, below_reorder_only: true })}`,
+export function fetchAnalyticsFilterOptions(token?: string | null): Promise<ApiResponse<AnalyticsFilterOptions>> {
+  return request<AnalyticsFilterOptions>("/analytics/filter-options", undefined, token);
+}
+
+export function fetchInventoryTurnover(
+  params?: { startDate?: string; endDate?: string },
+  token?: string | null,
+): Promise<ApiResponse<InventoryTurnoverItem[]>> {
+  return request<InventoryTurnoverItem[]>(
+    `/analytics/turnover${buildQuery({
+      start_date: params?.startDate,
+      end_date: params?.endDate,
+    })}`,
     undefined,
     token,
   );
 }
 
-export function generateForecast(payload: ForecastGenerateRequest, token?: string | null): Promise<ForecastRecordResponse> {
+export function fetchSupplierReliability(token?: string | null): Promise<ApiResponse<SupplierReliabilityItem[]>> {
+  return request<SupplierReliabilityItem[]>("/analytics/supplier-reliability", undefined, token);
+}
+
+export function fetchRegionalGrowth(token?: string | null): Promise<ApiResponse<RegionalGrowthItem[]>> {
+  return request<RegionalGrowthItem[]>("/analytics/regional-growth", undefined, token);
+}
+
+export function generateForecast(
+  payload: ForecastGenerateRequest,
+  token?: string | null,
+): Promise<ApiResponse<ForecastRecordResponse>> {
   return request<ForecastRecordResponse>(
     "/forecast/generate",
     {
@@ -95,24 +135,17 @@ export function fetchLatestForecast(
   productId: string,
   regionId: string,
   token?: string | null,
-): Promise<ForecastRecordResponse> {
+): Promise<ApiResponse<ForecastRecordResponse>> {
   return request<ForecastRecordResponse>(`/forecast/latest/${productId}/${regionId}`, undefined, token);
 }
 
-export function fetchForecastHistory(productId: string, token?: string | null): Promise<ForecastHistoryResponse> {
-  return request<ForecastHistoryResponse>(`/forecast/history/${productId}`, undefined, token);
+export function fetchForecastHistory(
+  productId: string,
+  token?: string | null,
+): Promise<ApiResponse<ForecastRecordResponse[]>> {
+  return request<ForecastRecordResponse[]>(`/forecast/history/${productId}`, undefined, token);
 }
 
-export function rebalanceInventory(
-  payload: InventoryRebalanceRequest,
-  token?: string | null,
-): Promise<InventoryRebalanceResponse> {
-  return request<InventoryRebalanceResponse>(
-    "/inventory/rebalance",
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-    },
-    token,
-  );
+export function fetchPipelineStatus(token?: string | null): Promise<ApiResponse<PipelineStatusItem>> {
+  return request<PipelineStatusItem>("/pipeline/status", undefined, token);
 }
