@@ -8,6 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from backend.settings import get_settings
@@ -16,6 +17,8 @@ from backend.settings import get_settings
 def _serialize_value(value: object) -> object:
     """Converts non-JSON-native values into cache-safe representations."""
 
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, UUID):
@@ -62,3 +65,16 @@ class CacheService:
         """Closes the underlying Redis client."""
 
         await self._client.aclose()
+
+
+async def check_redis_connection(redis_url: str | None = None) -> bool:
+    """Returns whether Redis is reachable for health checks."""
+
+    settings = get_settings()
+    client = Redis.from_url(redis_url or settings.redis_url, decode_responses=True)
+    try:
+        return bool(await client.ping())
+    except Exception:
+        return False
+    finally:
+        await client.aclose()
