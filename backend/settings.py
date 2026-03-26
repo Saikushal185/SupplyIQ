@@ -58,10 +58,13 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 300
     clerk_jwks_cache_ttl_seconds: int = 300
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
-    auth_enabled: bool = False
+    auth_enabled: bool = True
     clerk_jwks_url: str | None = None
     clerk_issuer: str | None = None
     clerk_audience: str | None = None
+    prefect_api_url: str | None = None
+    prefect_api_key: str | None = None
+    prefect_flow_name: str | None = None
 
     model_config = SettingsConfigDict(
         env_prefix="BACKEND_",
