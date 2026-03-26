@@ -2,109 +2,154 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.dependencies import get_cache_service, get_db
-from backend.models.schemas import AlertListResponse, AlertQuery, AnalyticsOverviewResponse, AnalyticsQuery, DemandPoint, SupplierPerformanceResponse
-from backend.services import db_service
+from backend.services import analytics_service, db_service
 from backend.services.cache_service import CacheService
+from backend.services.response_service import build_response
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
-def build_analytics_query(
-    region_id: Annotated[UUID | None, Query()] = None,
-    lookback_days: Annotated[int, Query(ge=7, le=365)] = 30,
-) -> AnalyticsQuery:
-    """Builds the validated analytics query model."""
+def _normalize_date_range(
+    start_date: date | None,
+    end_date: date | None,
+) -> tuple[date | None, date | None]:
+    """Rejects inverted date filters before running SQL work."""
 
-    return AnalyticsQuery(region_id=region_id, lookback_days=lookback_days)
-
-
-def build_alert_query(
-    region_id: Annotated[UUID | None, Query()] = None,
-    severity: Annotated[str | None, Query()] = None,
-    limit: Annotated[int, Query(ge=1, le=50)] = 6,
-) -> AlertQuery:
-    """Builds the validated alert query model."""
-
-    return AlertQuery(region_id=region_id, severity=severity, limit=limit)
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must be on or before end_date.")
+    return start_date, end_date
 
 
-@router.get("/overview", response_model=AnalyticsOverviewResponse)
-async def get_overview(
-    query: Annotated[AnalyticsQuery, Depends(build_analytics_query)],
+async def _load_cached_analytics_payload(
+    *,
+    cache_service: CacheService,
+    cache_namespace: str,
+    cache_payload: dict[str, object],
+    loader,
+) -> tuple[object, bool]:
+    """Loads analytics data from Redis or computes and stores it."""
+
+    cache_key = cache_service.build_key(cache_namespace, cache_payload)
+    cached_value = await cache_service.get_json(cache_key)
+    if cached_value is not None:
+        return cached_value, True
+
+    data = await loader()
+    await cache_service.set_json(cache_key, data)
+    return data, False
+
+
+@router.get("/sales")
+async def get_sales_analytics(
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db)],
     cache_service: Annotated[CacheService, Depends(get_cache_service)],
-) -> AnalyticsOverviewResponse:
-    """Returns KPI and demand trend data for the analytics overview page."""
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+    region_id: Annotated[UUID | None, Query()] = None,
+):
+    """Returns daily sales aggregated by region, filtered by date range when provided."""
 
-    cache_key = cache_service.build_key("analytics_overview", query.model_dump())
-    cached = await cache_service.get_json(cache_key)
-    if cached is not None:
-        return AnalyticsOverviewResponse.model_validate(cached)
-
-    response = AnalyticsOverviewResponse(
-        generated_at=datetime.now(timezone.utc),
-        region_id=query.region_id,
-        kpis=await db_service.build_analytics_kpis(session, region_id=query.region_id),
-        demand_series=await db_service.build_demand_series(
+    start_date, end_date = _normalize_date_range(start_date, end_date)
+    data, cached = await _load_cached_analytics_payload(
+        cache_service=cache_service,
+        cache_namespace=request.url.path,
+        cache_payload={
+            "start_date": start_date,
+            "end_date": end_date,
+            "region_id": region_id,
+        },
+        loader=lambda: db_service.get_sales_analytics(
             session,
-            region_id=query.region_id,
-            lookback_days=query.lookback_days,
+            start_date=start_date,
+            end_date=end_date,
+            region_id=region_id,
         ),
     )
-    await cache_service.set_json(cache_key, response.model_dump())
-    return response
+    return build_response(data, cached=cached)
 
 
-@router.get("/supplier-performance", response_model=SupplierPerformanceResponse)
-async def get_supplier_performance(
-    query: Annotated[AnalyticsQuery, Depends(build_analytics_query)],
+@router.get("/filter-options")
+async def get_filter_options(
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db)],
     cache_service: Annotated[CacheService, Depends(get_cache_service)],
-) -> SupplierPerformanceResponse:
-    """Returns supplier reliability and fill-rate analytics."""
+):
+    """Returns region and category metadata used by the analytics filter bar."""
 
-    cache_key = cache_service.build_key("supplier_performance", query.model_dump())
-    cached = await cache_service.get_json(cache_key)
-    if cached is not None:
-        return SupplierPerformanceResponse.model_validate(cached)
-
-    response = SupplierPerformanceResponse(
-        generated_at=datetime.now(timezone.utc),
-        items=await db_service.build_supplier_performance(session, region_id=query.region_id),
+    data, cached = await _load_cached_analytics_payload(
+        cache_service=cache_service,
+        cache_namespace=request.url.path,
+        cache_payload={},
+        loader=lambda: analytics_service.get_analytics_filter_options(session),
     )
-    await cache_service.set_json(cache_key, response.model_dump())
-    return response
+    return build_response(data, cached=cached)
 
 
-@router.get("/alerts", response_model=AlertListResponse)
-async def get_alerts(
-    query: Annotated[AlertQuery, Depends(build_alert_query)],
+@router.get("/turnover")
+async def get_inventory_turnover(
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db)],
     cache_service: Annotated[CacheService, Depends(get_cache_service)],
-) -> AlertListResponse:
-    """Returns current active alerts for the requested scope."""
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+):
+    """Returns inventory turnover ratio per product."""
 
-    cache_key = cache_service.build_key("alerts", query.model_dump())
-    cached = await cache_service.get_json(cache_key)
-    if cached is not None:
-        return AlertListResponse.model_validate(cached)
-
-    response = AlertListResponse(
-        generated_at=datetime.now(timezone.utc),
-        items=await db_service.list_alerts(
+    start_date, end_date = _normalize_date_range(start_date, end_date)
+    data, cached = await _load_cached_analytics_payload(
+        cache_service=cache_service,
+        cache_namespace=request.url.path,
+        cache_payload={
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        loader=lambda: db_service.get_inventory_turnover(
             session,
-            region_id=query.region_id,
-            severity=query.severity,
-            limit=query.limit,
+            start_date=start_date,
+            end_date=end_date,
         ),
     )
-    await cache_service.set_json(cache_key, response.model_dump())
-    return response
+    return build_response(data, cached=cached)
+
+
+@router.get("/supplier-reliability")
+async def get_supplier_reliability(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    cache_service: Annotated[CacheService, Depends(get_cache_service)],
+):
+    """Returns on-time delivery reliability by supplier."""
+
+    data, cached = await _load_cached_analytics_payload(
+        cache_service=cache_service,
+        cache_namespace=request.url.path,
+        cache_payload={},
+        loader=lambda: db_service.get_supplier_reliability(session),
+    )
+    return build_response(data, cached=cached)
+
+
+@router.get("/regional-growth")
+async def get_regional_growth(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    cache_service: Annotated[CacheService, Depends(get_cache_service)],
+):
+    """Returns the latest month-over-month revenue growth by region."""
+
+    data, cached = await _load_cached_analytics_payload(
+        cache_service=cache_service,
+        cache_namespace=request.url.path,
+        cache_payload={},
+        loader=lambda: analytics_service.get_regional_growth(session),
+    )
+    return build_response(data, cached=cached)
