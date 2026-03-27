@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from backend.middleware.auth import ClerkAuthMiddleware, ClerkTokenVerifier
-from backend.routers import analytics, forecast, inventory
+from backend.routers import analytics, forecast, inventory, pipeline
 from backend.services.cache_service import CacheService
-from backend.services.db_service import dispose_database_engine, initialize_database
+from backend.services.db_service import SessionLocal, dispose_database_engine, engine, initialize_database
 from backend.services.forecast_service import ForecastService
+from backend.services.response_service import build_response
 from backend.settings import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -24,7 +26,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Initializes database state and startup services."""
 
-    settings = get_settings()
     await initialize_database()
     app.state.cache_service = CacheService()
     app.state.forecast_service = ForecastService()
@@ -32,8 +33,34 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        await app.state.cache_service.close()
+        cache_service = getattr(app.state, "cache_service", None)
+        if cache_service is not None:
+            close_result = cache_service.close()
+            if inspect.isawaitable(close_result):
+                await close_result
         await dispose_database_engine()
+
+
+async def check_database_connection() -> bool:
+    """Returns whether the backing PostgreSQL database is reachable."""
+
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+        return True
+    except Exception:  # pragma: no cover - surfaced as a bool in health.
+        logger.exception("Database health check failed.")
+        return False
+
+
+async def check_redis_connection(cache_service: CacheService) -> bool:
+    """Returns whether the backing Redis cache is reachable."""
+
+    try:
+        return await cache_service.ping()
+    except Exception:  # pragma: no cover - surfaced as a bool in health.
+        logger.exception("Redis health check failed.")
+        return False
 
 
 def create_app() -> FastAPI:
@@ -55,11 +82,7 @@ def create_app() -> FastAPI:
             else None
         ),
         public_paths={
-            "/",
             f"{settings.api_prefix}/health",
-            "/docs",
-            "/openapi.json",
-            "/redoc",
         },
     )
     app.add_middleware(
@@ -71,14 +94,23 @@ def create_app() -> FastAPI:
     )
 
     @app.get(f"{settings.api_prefix}/health")
-    async def health() -> JSONResponse:
-        """Returns a lightweight health response for orchestration checks."""
+    async def health():
+        """Returns API, database, and cache health in the shared response envelope."""
 
-        return JSONResponse({"status": "ok"})
+        cache_service = getattr(app.state, "cache_service", None) or CacheService()
+        db_ok, redis_ok = await check_database_connection(), await check_redis_connection(cache_service)
+        return build_response(
+            {
+                "status": "ok",
+                "db": db_ok,
+                "redis": redis_ok,
+            }
+        )
 
     app.include_router(analytics.router, prefix=settings.api_prefix)
     app.include_router(forecast.router, prefix=settings.api_prefix)
     app.include_router(inventory.router, prefix=settings.api_prefix)
+    app.include_router(pipeline.router, prefix=settings.api_prefix)
     return app
 
 
