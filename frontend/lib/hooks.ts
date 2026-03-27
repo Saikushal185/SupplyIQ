@@ -4,79 +4,96 @@ import useSWR from "swr";
 
 import { useSessionContext } from "@/context/session-context";
 import {
-  fetchAlerts,
-  fetchAnalyticsOverview,
   fetchForecastHistory,
-  fetchInventoryPositions,
+  fetchInventorySummary,
+  fetchInventoryTurnover,
   fetchLatestForecast,
-  fetchStockouts,
-  fetchSupplierPerformance,
+  fetchLowStock,
+  fetchPipelineStatus,
+  fetchRegionalGrowth,
+  fetchSalesAnalytics,
+  fetchSupplierReliability,
 } from "@/lib/api";
 import type {
-  AlertListResponse,
-  AnalyticsOverviewResponse,
-  ForecastHistoryResponse,
+  ApiEnvelope,
   ForecastRecordResponse,
-  InventoryPositionResponse,
-  SupplierPerformanceResponse,
+  InventoryPositionItem,
+  InventoryTurnoverItem,
+  PipelineStatus,
+  RegionalGrowthItem,
+  SalesAnalyticsItem,
+  SupplierPerformanceItem,
 } from "@/types";
 
 type SwrKey = ReadonlyArray<string | number | boolean | null | undefined>;
 
 /** Creates an SWR query tied to the current session token context. */
-function useAuthedQuery<T>(key: SwrKey, fetcher: (token: string | null) => Promise<T>) {
+function useAuthedQuery<T>(key: SwrKey, fetcher: (token: string | null) => Promise<ApiEnvelope<T>>) {
   const session = useSessionContext();
+  const swrKey = session.isLoaded ? [...key, session.userId ?? "guest"] : null;
 
-  return useSWR([...key, session.userId ?? "guest"], async () => fetcher(await session.getToken()));
+  return useSWR(swrKey, async () => fetcher(await session.getToken()));
 }
 
-export function useAnalyticsOverview(regionCode?: string) {
-  return useAuthedQuery<AnalyticsOverviewResponse>(["analytics-overview", regionCode], (token) =>
-    fetchAnalyticsOverview(regionCode, token),
+function useOptionalAuthedQuery<T>(key: SwrKey, fetcher: (token: string | null) => Promise<ApiEnvelope<T> | null>) {
+  const session = useSessionContext();
+  const swrKey = session.isLoaded ? [...key, session.userId ?? "guest"] : null;
+
+  return useSWR(swrKey, async () => fetcher(await session.getToken()));
+}
+
+export function useInventorySummary(regionId?: string) {
+  return useAuthedQuery<InventoryPositionItem[]>(["inventory-summary", regionId], (token) =>
+    fetchInventorySummary(regionId, token),
   );
 }
 
-export function useAlerts(regionCode?: string) {
-  return useAuthedQuery<AlertListResponse>(["alerts", regionCode], (token) => fetchAlerts(regionCode, token));
+export function useLowStock(regionId?: string) {
+  return useAuthedQuery<InventoryPositionItem[]>(["low-stock", regionId], (token) => fetchLowStock(regionId, token));
 }
 
-export function useStockouts(regionCode?: string) {
-  return useAuthedQuery<InventoryPositionResponse>(["stockouts", regionCode], (token) =>
-    fetchStockouts(regionCode, token),
+export function useSalesAnalytics(startDate?: string, endDate?: string, regionId?: string) {
+  return useAuthedQuery<SalesAnalyticsItem[]>(["sales-analytics", startDate, endDate, regionId], (token) =>
+    fetchSalesAnalytics(startDate, endDate, regionId, token),
   );
 }
 
-export function useSupplierPerformance(regionCode?: string) {
-  return useAuthedQuery<SupplierPerformanceResponse>(["supplier-performance", regionCode], (token) =>
-    fetchSupplierPerformance(regionCode, token),
+export function useInventoryTurnover(startDate?: string, endDate?: string) {
+  return useAuthedQuery<InventoryTurnoverItem[]>(["inventory-turnover", startDate, endDate], (token) =>
+    fetchInventoryTurnover(startDate, endDate, token),
   );
 }
 
-export function useInventoryPositions(regionCode?: string, belowReorderOnly = false) {
-  return useAuthedQuery<InventoryPositionResponse>(["inventory-positions", regionCode, belowReorderOnly], (token) =>
-    fetchInventoryPositions(regionCode, belowReorderOnly, token),
+export function useSupplierReliability(regionId?: string) {
+  return useAuthedQuery<SupplierPerformanceItem[]>(["supplier-reliability", regionId], (token) =>
+    fetchSupplierReliability(regionId, token),
   );
+}
+
+export function useRegionalGrowth() {
+  return useAuthedQuery<RegionalGrowthItem[]>(["regional-growth"], (token) => fetchRegionalGrowth(token));
 }
 
 export function useLatestForecast(productId: string | null, regionId: string | null) {
   const shouldFetch = Boolean(productId && regionId);
-  return useAuthedQuery<ForecastRecordResponse | null>(
-    ["latest-forecast", productId, regionId, shouldFetch],
-    async (token) => {
-      if (!productId || !regionId) {
-        return null;
-      }
-      return fetchLatestForecast(productId, regionId, token);
-    },
-  );
+  return useOptionalAuthedQuery<ForecastRecordResponse>(["latest-forecast", productId, regionId, shouldFetch], async (token) => {
+    if (!productId || !regionId) {
+      return null;
+    }
+    return fetchLatestForecast(productId, regionId, token);
+  });
 }
 
 export function useForecastHistory(productId: string | null) {
   const shouldFetch = Boolean(productId);
-  return useAuthedQuery<ForecastHistoryResponse | null>(["forecast-history", productId, shouldFetch], async (token) => {
+  return useOptionalAuthedQuery<ForecastRecordResponse[]>(["forecast-history", productId, shouldFetch], async (token) => {
     if (!productId) {
       return null;
     }
     return fetchForecastHistory(productId, token);
   });
+}
+
+export function usePipelineStatus() {
+  return useAuthedQuery<PipelineStatus>(["pipeline-status"], (token) => fetchPipelineStatus(token));
 }
