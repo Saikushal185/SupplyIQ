@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     clerk_jwks_url: str | None = None
     clerk_issuer: str | None = None
     clerk_audience: str | None = None
+    prefect_api_url: str | None = None
+    prefect_api_key: str | None = None
+    prefect_flow_name: str | None = None
 
     model_config = SettingsConfigDict(
         env_prefix="BACKEND_",
