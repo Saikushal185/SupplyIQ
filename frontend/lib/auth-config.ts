@@ -8,7 +8,25 @@ export const guestSessionSnapshot: SessionSnapshot = {
   userId: null,
   displayName: "Guest Operator",
   primaryEmail: null,
+  role: "admin",
   roleLabel: "Demo Mode",
+  canViewForecast: true,
+  canGenerateForecast: true,
+  canViewPipeline: true,
+  getToken: guestTokenResolver,
+};
+
+export const signedOutSessionSnapshot: SessionSnapshot = {
+  isLoaded: true,
+  isSignedIn: false,
+  userId: null,
+  displayName: "Awaiting Sign-In",
+  primaryEmail: null,
+  role: "viewer",
+  roleLabel: "Awaiting Sign-In",
+  canViewForecast: false,
+  canGenerateForecast: false,
+  canViewPipeline: false,
   getToken: guestTokenResolver,
 };
 
