@@ -6,14 +6,25 @@ import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { Activity, BarChart3, BrainCircuit, ShieldCheck } from "lucide-react";
 
-const navItems = [
-  { href: "/dashboard" as Route, label: "Dashboard", icon: Activity },
-  { href: "/analytics" as Route, label: "Analytics", icon: BarChart3 },
-  { href: "/forecast" as Route, label: "Forecast", icon: BrainCircuit },
+import { useSessionContext } from "@/context/session-context";
+
+interface NavItem {
+  href: Route;
+  label: string;
+  icon: typeof Activity;
+  visible: (canViewForecast: boolean) => boolean;
+}
+
+const navItems: NavItem[] = [
+  { href: "/dashboard" as Route, label: "Dashboard", icon: Activity, visible: () => true },
+  { href: "/analytics" as Route, label: "Analytics", icon: BarChart3, visible: () => true },
+  { href: "/forecast" as Route, label: "Forecast", icon: BrainCircuit, visible: (canViewForecast: boolean) => canViewForecast },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const session = useSessionContext();
+  const visibleItems = navItems.filter((item) => item.visible(session.canViewForecast));
 
   return (
     <aside className="rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-glow backdrop-blur">
@@ -26,7 +37,7 @@ export function Sidebar() {
       </div>
 
       <nav className="space-y-2">
-        {navItems.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
           return (
             <Link
@@ -44,6 +55,18 @@ export function Sidebar() {
             </Link>
           );
         })}
+        {session.canViewPipeline ? (
+          <Link
+            href={"/pipeline" as Route}
+            className={clsx(
+              "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition",
+              pathname === "/pipeline" ? "bg-cyan-400/20 text-white" : "text-slate-300 hover:bg-white/5 hover:text-white",
+            )}
+          >
+            <ShieldCheck className="h-4 w-4" />
+            Pipeline
+          </Link>
+        ) : null}
       </nav>
 
       <div className="mt-8 rounded-2xl border border-emerald-400/15 bg-emerald-400/10 p-4">
