@@ -1,13 +1,14 @@
 import type {
-  AlertListResponse,
-  AnalyticsOverviewResponse,
+  ApiEnvelope,
   ForecastGenerateRequest,
-  ForecastHistoryResponse,
   ForecastRecordResponse,
-  InventoryPositionResponse,
-  InventoryRebalanceRequest,
-  InventoryRebalanceResponse,
-  SupplierPerformanceResponse,
+  InventoryHistoryItem,
+  InventoryPositionItem,
+  InventoryTurnoverItem,
+  PipelineStatus,
+  RegionalGrowthItem,
+  SalesAnalyticsItem,
+  SupplierPerformanceItem,
 } from "@/types";
 
 const API_BASE_URL =
@@ -28,8 +29,25 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return query ? `?${query}` : "";
 }
 
+async function readErrorMessage(response: Response): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const payload = (await response.json()) as { detail?: string };
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      return payload.detail;
+    }
+  }
+
+  const message = await response.text();
+  return message || `API request failed: ${response.status}`;
+}
+
 /** Sends a typed HTTP request to the backend API. */
-async function request<T>(path: string, init?: RequestInit, token?: string | null): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  token?: string | null,
+): Promise<ApiEnvelope<T>> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
@@ -41,46 +59,86 @@ async function request<T>(path: string, init?: RequestInit, token?: string | nul
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `API request failed: ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
 
-  return (await response.json()) as T;
+  return (await response.json()) as ApiEnvelope<T>;
 }
 
-export function fetchAnalyticsOverview(regionCode?: string, token?: string | null): Promise<AnalyticsOverviewResponse> {
-  return request<AnalyticsOverviewResponse>(`/analytics/overview${buildQuery({ region_id: regionCode })}`, undefined, token);
-}
-
-export function fetchSupplierPerformance(regionCode?: string, token?: string | null): Promise<SupplierPerformanceResponse> {
-  return request<SupplierPerformanceResponse>(`/analytics/supplier-performance${buildQuery({ region_id: regionCode })}`, undefined, token);
-}
-
-export function fetchAlerts(regionCode?: string, token?: string | null): Promise<AlertListResponse> {
-  return request<AlertListResponse>(`/analytics/alerts${buildQuery({ region_id: regionCode })}`, undefined, token);
-}
-
-export function fetchInventoryPositions(
-  regionCode?: string,
-  belowReorderOnly = false,
+async function requestAllow404<T>(
+  path: string,
+  init?: RequestInit,
   token?: string | null,
-): Promise<InventoryPositionResponse> {
-  return request<InventoryPositionResponse>(
-    `/inventory/positions${buildQuery({ region_id: regionCode, below_reorder_only: belowReorderOnly })}`,
+): Promise<ApiEnvelope<T> | null> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
+    cache: "no-store",
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as ApiEnvelope<T>;
+}
+
+export function fetchInventorySummary(regionId?: string, token?: string | null) {
+  return request<InventoryPositionItem[]>(`/inventory/summary${buildQuery({ region_id: regionId })}`, undefined, token);
+}
+
+export function fetchLowStock(regionId?: string, token?: string | null) {
+  return request<InventoryPositionItem[]>(`/inventory/low-stock${buildQuery({ region_id: regionId })}`, undefined, token);
+}
+
+export function fetchInventoryHistory(productId: string, token?: string | null) {
+  return request<InventoryHistoryItem[]>(`/inventory/${productId}/history`, undefined, token);
+}
+
+export function fetchSalesAnalytics(startDate?: string, endDate?: string, regionId?: string, token?: string | null) {
+  return request<SalesAnalyticsItem[]>(
+    `/analytics/sales${buildQuery({
+      start_date: startDate,
+      end_date: endDate,
+      region_id: regionId,
+    })}`,
     undefined,
     token,
   );
 }
 
-export function fetchStockouts(regionCode?: string, token?: string | null): Promise<InventoryPositionResponse> {
-  return request<InventoryPositionResponse>(
-    `/inventory/stockouts${buildQuery({ region_id: regionCode, below_reorder_only: true })}`,
+export function fetchInventoryTurnover(startDate?: string, endDate?: string, token?: string | null) {
+  return request<InventoryTurnoverItem[]>(
+    `/analytics/turnover${buildQuery({
+      start_date: startDate,
+      end_date: endDate,
+    })}`,
     undefined,
     token,
   );
 }
 
-export function generateForecast(payload: ForecastGenerateRequest, token?: string | null): Promise<ForecastRecordResponse> {
+export function fetchSupplierReliability(regionId?: string, token?: string | null) {
+  return request<SupplierPerformanceItem[]>(
+    `/analytics/supplier-reliability${buildQuery({ region_id: regionId })}`,
+    undefined,
+    token,
+  );
+}
+
+export function fetchRegionalGrowth(token?: string | null) {
+  return request<RegionalGrowthItem[]>("/analytics/regional-growth", undefined, token);
+}
+
+export function generateForecast(payload: ForecastGenerateRequest, token?: string | null) {
   return request<ForecastRecordResponse>(
     "/forecast/generate",
     {
@@ -91,28 +149,14 @@ export function generateForecast(payload: ForecastGenerateRequest, token?: strin
   );
 }
 
-export function fetchLatestForecast(
-  productId: string,
-  regionId: string,
-  token?: string | null,
-): Promise<ForecastRecordResponse> {
-  return request<ForecastRecordResponse>(`/forecast/latest/${productId}/${regionId}`, undefined, token);
+export function fetchLatestForecast(productId: string, regionId: string, token?: string | null) {
+  return requestAllow404<ForecastRecordResponse>(`/forecast/latest/${productId}/${regionId}`, undefined, token);
 }
 
-export function fetchForecastHistory(productId: string, token?: string | null): Promise<ForecastHistoryResponse> {
-  return request<ForecastHistoryResponse>(`/forecast/history/${productId}`, undefined, token);
+export function fetchForecastHistory(productId: string, token?: string | null) {
+  return request<ForecastRecordResponse[]>(`/forecast/history/${productId}`, undefined, token);
 }
 
-export function rebalanceInventory(
-  payload: InventoryRebalanceRequest,
-  token?: string | null,
-): Promise<InventoryRebalanceResponse> {
-  return request<InventoryRebalanceResponse>(
-    "/inventory/rebalance",
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-    },
-    token,
-  );
+export function fetchPipelineStatus(token?: string | null) {
+  return request<PipelineStatus>("/pipeline/status", undefined, token);
 }
