@@ -121,6 +121,27 @@ def _snapshot_created_at(snapshot_date: date) -> datetime:
     return datetime.combine(snapshot_date, time.min, tzinfo=timezone.utc)
 
 
+def _default_date_range(
+    *,
+    start_date: date | None,
+    end_date: date | None,
+    lookback_days: int = 30,
+) -> tuple[date, date]:
+    """Returns a normalized inclusive date range for analytics queries."""
+
+    resolved_end = end_date or date.today()
+    resolved_start = start_date or (resolved_end - timedelta(days=lookback_days - 1))
+    if resolved_start > resolved_end:
+        raise ValueError("start_date must be on or before end_date.")
+    return resolved_start, resolved_end
+
+
+def _coerce_float(value: object) -> float:
+    """Converts SQL numeric values to plain floats for JSON responses."""
+
+    return round(float(value or 0), 2)
+
+
 async def _load_latest_inventory_rows(
     session: AsyncSession,
     region_id: UUID | None = None,
@@ -386,6 +407,186 @@ async def list_inventory_positions(
         )
 
     return items[:limit]
+
+
+async def get_inventory_summary(
+    session: AsyncSession,
+    *,
+    region_id: UUID | None = None,
+) -> list[dict[str, object]]:
+    """Returns the current stock footprint across products and regions."""
+
+    rows = await list_inventory_positions(
+        session,
+        region_id=region_id,
+        below_reorder_only=False,
+        limit=10_000,
+    )
+    return [row.model_dump(mode="json") for row in rows]
+
+
+async def get_inventory_history(
+    session: AsyncSession,
+    *,
+    product_id: UUID,
+    days: int = 90,
+) -> list[dict[str, object]]:
+    """Returns the recent inventory snapshot history for a product."""
+
+    start_date = date.today() - timedelta(days=max(days - 1, 0))
+    statement = (
+        select(InventorySnapshot, Product, Region)
+        .join(Product, InventorySnapshot.product_id == Product.id)
+        .join(Region, InventorySnapshot.region_id == Region.id)
+        .where(
+            InventorySnapshot.product_id == product_id,
+            InventorySnapshot.snapshot_date >= start_date,
+        )
+        .order_by(InventorySnapshot.snapshot_date.asc(), Region.name.asc())
+    )
+    rows = (await session.execute(statement)).all()
+    return [
+        {
+            "product_id": str(product.id),
+            "product_name": product.name,
+            "region_id": str(region.id),
+            "region_name": region.name,
+            "snapshot_date": snapshot.snapshot_date.isoformat(),
+            "quantity": snapshot.quantity,
+        }
+        for snapshot, product, region in rows
+    ]
+
+
+async def get_low_stock(
+    session: AsyncSession,
+    *,
+    region_id: UUID | None = None,
+) -> list[dict[str, object]]:
+    """Returns the latest positions below reorder point."""
+
+    rows = await list_inventory_positions(
+        session,
+        region_id=region_id,
+        below_reorder_only=True,
+        limit=10_000,
+    )
+    return [row.model_dump(mode="json") for row in rows]
+
+
+async def get_sales_analytics(
+    session: AsyncSession,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    region_id: UUID | None = None,
+) -> list[dict[str, object]]:
+    """Aggregates daily sales by region for the requested date window."""
+
+    resolved_start, resolved_end = _default_date_range(start_date=start_date, end_date=end_date)
+    statement = (
+        select(
+            Region.id,
+            Region.name,
+            DailySale.sale_date,
+            func.sum(DailySale.units_sold).label("units_sold"),
+            func.sum(func.coalesce(DailySale.revenue, 0)).label("revenue"),
+        )
+        .join(Region, DailySale.region_id == Region.id)
+        .where(DailySale.sale_date >= resolved_start, DailySale.sale_date <= resolved_end)
+        .group_by(Region.id, Region.name, DailySale.sale_date)
+        .order_by(DailySale.sale_date.asc(), Region.name.asc())
+    )
+    if region_id is not None:
+        statement = statement.where(DailySale.region_id == region_id)
+
+    rows = (await session.execute(statement)).all()
+    return [
+        {
+            "region_id": str(region_key),
+            "region_name": region_name,
+            "sale_date": sale_date.isoformat(),
+            "units_sold": int(units_sold or 0),
+            "revenue": _coerce_float(revenue),
+        }
+        for region_key, region_name, sale_date, units_sold, revenue in rows
+    ]
+
+
+async def get_inventory_turnover(
+    session: AsyncSession,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[dict[str, object]]:
+    """Returns inventory turnover by product for the requested date window."""
+
+    resolved_start, resolved_end = _default_date_range(start_date=start_date, end_date=end_date)
+    cogs_subquery = (
+        select(
+            DailySale.product_id.label("product_id"),
+            func.sum(DailySale.units_sold * func.coalesce(Product.unit_cost, 0)).label("cost_of_goods"),
+        )
+        .join(Product, DailySale.product_id == Product.id)
+        .where(DailySale.sale_date >= resolved_start, DailySale.sale_date <= resolved_end)
+        .group_by(DailySale.product_id)
+        .subquery()
+    )
+    inventory_subquery = (
+        select(
+            InventorySnapshot.product_id.label("product_id"),
+            func.avg(InventorySnapshot.quantity * func.coalesce(Product.unit_cost, 0)).label("average_inventory_value"),
+        )
+        .join(Product, InventorySnapshot.product_id == Product.id)
+        .where(InventorySnapshot.snapshot_date >= resolved_start, InventorySnapshot.snapshot_date <= resolved_end)
+        .group_by(InventorySnapshot.product_id)
+        .subquery()
+    )
+    statement = (
+        select(
+            Product.id,
+            Product.name,
+            Product.sku,
+            cogs_subquery.c.cost_of_goods,
+            inventory_subquery.c.average_inventory_value,
+        )
+        .select_from(Product)
+        .join(cogs_subquery, cogs_subquery.c.product_id == Product.id, isouter=True)
+        .join(inventory_subquery, inventory_subquery.c.product_id == Product.id, isouter=True)
+        .where(
+            cogs_subquery.c.cost_of_goods.is_not(None)
+            | inventory_subquery.c.average_inventory_value.is_not(None)
+        )
+        .order_by(Product.name.asc())
+    )
+    rows = (await session.execute(statement)).all()
+
+    payload: list[dict[str, object]] = []
+    for product_id, product_name, sku, cost_of_goods, average_inventory_value in rows:
+        cogs_value = _coerce_float(cost_of_goods)
+        average_inventory = _coerce_float(average_inventory_value)
+        payload.append(
+            {
+                "product_id": str(product_id),
+                "product_name": product_name,
+                "sku": sku,
+                "cost_of_goods": cogs_value,
+                "average_inventory_value": average_inventory,
+                "turnover_ratio": round(cogs_value / average_inventory, 2) if average_inventory else 0.0,
+            }
+        )
+    return payload
+
+
+async def get_supplier_reliability(
+    session: AsyncSession,
+    *,
+    region_id: UUID | None = None,
+) -> list[dict[str, object]]:
+    """Returns on-time delivery reliability by supplier."""
+
+    rows = await build_supplier_performance(session, region_id=region_id)
+    return [row.model_dump(mode="json") for row in rows]
 
 
 def _normalize_forecast_payload(payload: dict[str, object] | None) -> ForecastPayload:
