@@ -1,32 +1,19 @@
 "use client";
 
-import { useUser } from "@clerk/nextjs";
 import Link from "next/link";
+import type { Route } from "next";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
-import { Activity, BarChart3, BrainCircuit, Radar, ShieldCheck } from "lucide-react";
+import { Activity, BarChart3, BrainCircuit, ShieldCheck } from "lucide-react";
 
-import type { UserRole } from "@/types";
-
-interface NavItem {
-  href: string;
-  label: string;
-  icon: typeof Activity;
-  roles: UserRole[];
-}
-
-const navItems: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: Activity, roles: ["admin", "analyst", "viewer"] },
-  { href: "/analytics", label: "Analytics", icon: BarChart3, roles: ["admin", "analyst", "viewer"] },
-  { href: "/forecast", label: "Forecast", icon: BrainCircuit, roles: ["admin", "analyst"] },
-  { href: "/pipeline", label: "Pipeline", icon: Radar, roles: ["admin"] },
+const navItems = [
+  { href: "/dashboard" as Route, label: "Dashboard", icon: Activity },
+  { href: "/analytics" as Route, label: "Analytics", icon: BarChart3 },
+  { href: "/forecast" as Route, label: "Forecast", icon: BrainCircuit },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { user } = useUser();
-  const role = (typeof user?.publicMetadata?.role === "string" ? user.publicMetadata.role : "viewer") as UserRole;
-  const allowedNavItems = navItems.filter((item) => item.roles.includes(role));
 
   return (
     <aside className="rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-glow backdrop-blur">
@@ -39,12 +26,12 @@ export function Sidebar() {
       </div>
 
       <nav className="space-y-2">
-        {allowedNavItems.map((item) => {
+        {navItems.map((item) => {
           const Icon = item.icon;
           return (
             <Link
               key={item.href}
-              href={item.href as never}
+              href={item.href}
               className={clsx(
                 "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition",
                 pathname === item.href
@@ -65,7 +52,7 @@ export function Sidebar() {
           Protected workspace
         </div>
         <p className="mt-2 text-sm text-slate-300">
-          Clerk sessions drive route access, role-aware navigation, and backend JWT authorization.
+          Clerk middleware and backend JWT validation are ready when environment keys are enabled.
         </p>
       </div>
     </aside>

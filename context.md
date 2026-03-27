@@ -21,10 +21,7 @@ Prefect pipeline -> PostgreSQL + Redis -> FastAPI backend -> Next.js 14 frontend
 - [x] Backend Redis cache migrated to async `redis.asyncio` usage in `backend/services/cache_service.py`
 - [x] Pipeline PostgreSQL writes now use direct SQL through `pipeline/tasks/load.py`
 - [x] Pipeline alert refresh now reads PostgreSQL directly and stores JSON in Redis from `pipeline/flows/alert_flow.py`
-- [x] Clerk-aware frontend providers, session context, SWR data hooks, and proxy-based auth scaffolding now support keyless local auth plus deployment-time backend token validation
-- [x] Clerk auth updated to latest `@clerk/nextjs` (`proxy.ts`, `clerkMiddleware`, `<Show>` components, keyless mode active)
-- [x] `backend/middleware/auth.py` - JWT verification via `CLERK_JWKS_URL`
-- [ ] Section 6 - Auth roles + all API endpoints - NOT started
+- [x] Clerk-aware frontend providers, session context, SWR data hooks, and middleware route protection remain wired for optional auth
 - [x] Health checks target `/api/v1/health` in both root and `infra/` Compose definitions
 - [x] Exact six-table PostgreSQL schema replacement completed across ORM and bootstrap SQL:
   `products`, `regions`, `inventory_snapshots`, `daily_sales`, `supplier_shipments`, and `forecast_runs`
@@ -48,7 +45,7 @@ Prefect pipeline -> PostgreSQL + Redis -> FastAPI backend -> Next.js 14 frontend
 - Backend keeps a sync-style PostgreSQL env var and converts it internally to `asyncpg` for SQLAlchemy async sessions
 - Docker bootstrap must execute pipeline CLI helpers directly; decorated Prefect flows remain for orchestrated runs
 - Pipeline direct DB clients must strip SQLAlchemy driver suffixes before connecting to PostgreSQL
-- Clerk auth uses keyless mode in local development; deployment environments still need real Clerk keys and backend JWKS configuration
+- Clerk auth remains optional in local development until env keys are set; when enabled, frontend middleware and backend bearer-token validation activate together
 - Public health and container readiness endpoint is `/api/v1/health`
 - Persistent application schema must remain exactly these six tables with no extra persisted tables or columns:
   `products`, `regions`, `inventory_snapshots`, `daily_sales`, `supplier_shipments`, and `forecast_runs`
@@ -57,15 +54,6 @@ Prefect pipeline -> PostgreSQL + Redis -> FastAPI backend -> Next.js 14 frontend
 - Supplier analytics are shipment-truthful and aggregate `supplier_shipments` by `supplier_name`
 - Root Docker Compose currently uses `postgres:16-alpine`; fresh bootstrap verification was completed with an isolated Compose project so `infra/init.sql` ran from an empty volume
 - `prefect==2.20.25` requires `sqlalchemy<2.0.36`, so `backend/requirements.txt` is intentionally pinned to `sqlalchemy==2.0.35`
-
-## Clerk Auth (updated)
-- Package: @clerk/nextjs@latest
-- Middleware file: proxy.ts (NOT middleware.ts)
-- Uses clerkMiddleware() from @clerk/nextjs/server
-- Component: <Show when="signed-in/out"> (NOT <SignedIn>/<SignedOut>)
-- Keyless mode active for local dev - no env vars needed to test
-- Real keys required before Vercel/Railway deployment
-- Backend JWKS URL: read from os.getenv("CLERK_JWKS_URL")
 
 ## ML Model Architecture (confirmed)
 - One Prophet model trained per `(product_id, region_id)` pair

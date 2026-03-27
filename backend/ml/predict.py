@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean
 from typing import TYPE_CHECKING, Any, Sequence
 
 try:
@@ -458,126 +458,6 @@ def _build_forecast_rows(
     return combined_rows
 
 
-def _build_fallback_forecast_rows(
-    recent_history: Sequence[SalesObservation],
-    *,
-    horizon_days: int = 7,
-) -> list[dict[str, object]]:
-    """Builds a heuristic forecast when trained ML artifacts are unavailable."""
-
-    dense_history = build_dense_history(recent_history)
-    trailing_units = [_coerce_float(row.units_sold) for row in dense_history[-28:]]
-    last_observation_date = dense_history[-1].sale_date
-    recent_avg = mean(trailing_units[-7:]) if trailing_units[-7:] else mean(trailing_units)
-    prior_window = trailing_units[-14:-7]
-    momentum = recent_avg - (mean(prior_window) if prior_window else recent_avg)
-    variability = pstdev(trailing_units[-14:]) if len(trailing_units[-14:]) > 1 else max(recent_avg * 0.12, 1.0)
-
-    rows: list[dict[str, object]] = []
-    for offset in range(1, horizon_days + 1):
-        forecast_date = last_observation_date + timedelta(days=offset)
-        same_weekday_values = [
-            _coerce_float(observation.units_sold)
-            for observation in dense_history
-            if observation.sale_date.weekday() == forecast_date.weekday()
-        ][-6:]
-        seasonal_baseline = mean(same_weekday_values) if same_weekday_values else recent_avg
-        predicted_units, lower_bound, upper_bound = _normalize_prediction_bounds(
-            seasonal_baseline + (momentum * 0.35),
-            seasonal_baseline - variability,
-            seasonal_baseline + variability * 1.15,
-        )
-        rows.append(
-            {
-                "date": forecast_date.isoformat(),
-                "predicted_units": predicted_units,
-                "lower_bound": lower_bound,
-                "upper_bound": upper_bound,
-                "units": predicted_units,
-                "lower": lower_bound,
-                "upper": upper_bound,
-            }
-        )
-
-    return rows
-
-
-def _build_fallback_top_features(
-    recent_history: Sequence[SalesObservation],
-    history_rows: Sequence[dict[str, object]],
-) -> list[dict[str, object]]:
-    """Builds a compact explanation payload for heuristic local forecasts."""
-
-    dense_history = build_dense_history(recent_history)
-    trailing_units = [_coerce_float(observation.units_sold) for observation in dense_history[-28:]]
-    recent_avg = mean(trailing_units[-7:]) if trailing_units[-7:] else mean(trailing_units)
-    previous_avg = mean(trailing_units[-14:-7]) if trailing_units[-14:-7] else recent_avg
-    weekend_values = [
-        _coerce_float(observation.units_sold)
-        for observation in dense_history[-28:]
-        if observation.sale_date.weekday() >= 5
-    ]
-    weekday_values = [
-        _coerce_float(observation.units_sold)
-        for observation in dense_history[-28:]
-        if observation.sale_date.weekday() < 5
-    ]
-    recent_feature_rows = history_rows[-14:] if history_rows else []
-    average_traffic = mean(_coerce_float(row.get("traffic_index")) for row in recent_feature_rows) if recent_feature_rows else 0.0
-    average_weather = mean(_coerce_float(row.get("weather_temp")) for row in recent_feature_rows) if recent_feature_rows else 0.0
-
-    candidate_features = [
-        {
-            "feature": "recent_demand_momentum",
-            "value": round(recent_avg - previous_avg, 4),
-            "direction": "up" if recent_avg >= previous_avg else "down",
-            "contribution": round(abs(recent_avg - previous_avg), 4),
-        },
-        {
-            "feature": "weekend_pattern",
-            "value": round((mean(weekend_values) if weekend_values else recent_avg), 4),
-            "direction": "up" if (mean(weekend_values) if weekend_values else recent_avg) >= (mean(weekday_values) if weekday_values else recent_avg) else "down",
-            "contribution": round(abs((mean(weekend_values) if weekend_values else recent_avg) - (mean(weekday_values) if weekday_values else recent_avg)), 4),
-        },
-        {
-            "feature": "traffic_index",
-            "value": round(average_traffic, 4),
-            "direction": "up" if average_traffic >= 1 else "down",
-            "contribution": round(abs(average_traffic - 1) * max(recent_avg, 1), 4),
-        },
-        {
-            "feature": "weather_temp",
-            "value": round(average_weather, 4),
-            "direction": "up" if average_weather >= 65 else "down",
-            "contribution": round(abs(average_weather - 65) / 10, 4),
-        },
-        {
-            "feature": "rolling_7d_avg",
-            "value": round(recent_avg, 4),
-            "direction": "up",
-            "contribution": round(recent_avg, 4),
-        },
-    ]
-    return sorted(candidate_features, key=lambda item: item["contribution"], reverse=True)[:5]
-
-
-def _should_use_fallback(exc: Exception) -> bool:
-    """Returns whether a runtime failure should switch to the heuristic fallback."""
-
-    message = str(exc).lower()
-    if isinstance(exc, HTTPException) and getattr(exc, "detail", "") == MISSING_PROPHET_MODEL_MESSAGE:
-        return True
-    return any(
-        token in message
-        for token in (
-            "train the hybrid model",
-            "joblib must be installed",
-            "artifact",
-            "no trained model found",
-        )
-    )
-
-
 def _build_forecast_summary(
     *,
     forecast_days: Sequence[dict[str, object]],
@@ -712,36 +592,20 @@ async def generate_forecast(
         raise LookupError("At least 7 days of sales history are required to generate a forecast.")
 
     history_rows = engineer_history_features(recent_history)
-    forecast_method = "shap_tree_explainer"
-
-    try:
-        prophet_rows = _forecast_prophet_baseline(
-            prophet_model or load_prophet_model_for_scope(product_id, region_id),
-            periods=7,
-        )
-        future_dates = [_coerce_date(row["date"]) for row in prophet_rows]
-        baseline_predictions = [_coerce_float(row.get("yhat")) for row in prophet_rows]
-        future_feature_rows = build_future_feature_rows(history_rows, future_dates, baseline_predictions)
-        residual_predictions = _predict_residual_corrections(
-            xgb_model or XGB_RESIDUAL_MODEL,
-            future_feature_rows,
-        )
-        shap_values = _compute_shap_values(explainer or SHAP_EXPLAINER, future_feature_rows)
-        forecast_days = _build_forecast_rows(prophet_rows, residual_predictions)
-        top_features = summarize_feature_impacts(future_feature_rows, shap_values, top_n=5)
-    except Exception as exc:
-        if not _should_use_fallback(exc):
-            raise
-        logger.info(
-            "Falling back to heuristic forecast generation for product %s and region %s: %s",
-            product_id,
-            region_id,
-            exc,
-        )
-        forecast_method = "heuristic_local_fallback"
-        future_feature_rows = []
-        forecast_days = _build_fallback_forecast_rows(recent_history, horizon_days=7)
-        top_features = _build_fallback_top_features(recent_history, history_rows)
+    prophet_rows = _forecast_prophet_baseline(
+        prophet_model or load_prophet_model_for_scope(product_id, region_id),
+        periods=7,
+    )
+    future_dates = [_coerce_date(row["date"]) for row in prophet_rows]
+    baseline_predictions = [_coerce_float(row.get("yhat")) for row in prophet_rows]
+    future_feature_rows = build_future_feature_rows(history_rows, future_dates, baseline_predictions)
+    residual_predictions = _predict_residual_corrections(
+        xgb_model or XGB_RESIDUAL_MODEL,
+        future_feature_rows,
+    )
+    shap_values = _compute_shap_values(explainer or SHAP_EXPLAINER, future_feature_rows)
+    forecast_days = _build_forecast_rows(prophet_rows, residual_predictions)
+    top_features = summarize_feature_impacts(future_feature_rows, shap_values, top_n=5)
 
     stockout_risk = detect_stockout_risk(
         current_inventory=int(inventory_context.quantity),
@@ -760,7 +624,7 @@ async def generate_forecast(
         ),
     }
     shap_json = {
-        "method": forecast_method,
+        "method": "shap_tree_explainer",
         "top_features": top_features,
     }
 

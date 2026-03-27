@@ -3,53 +3,32 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 import jwt
-from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-
-from backend.dependencies import build_auth_context
 
 
 class AuthError(Exception):
     """Represents a request authentication failure."""
 
 
-CLERK_JWKS_SUFFIX = "/.well-known/jwks.json"
-
-
-def resolve_clerk_jwks_url(jwks_url: str | None) -> str | None:
-    """Normalizes a Clerk frontend API URL into the latest JWKS endpoint format."""
-
-    configured_url = jwks_url or os.getenv("CLERK_JWKS_URL")
-    if not configured_url:
-        return None
-
-    normalized_url = configured_url.strip().rstrip("/")
-    if normalized_url.endswith(CLERK_JWKS_SUFFIX):
-        return normalized_url
-    return f"{normalized_url}{CLERK_JWKS_SUFFIX}"
-
-
 @dataclass(slots=True)
 class ClerkTokenVerifier:
     """Validates Clerk session tokens against the configured JWKS endpoint."""
 
-    jwks_url: str | None = None
+    jwks_url: str
     issuer: str | None = None
     audience: str | None = None
     cache_ttl_seconds: int = 300
 
     def __post_init__(self) -> None:
-        self.jwks_url = resolve_clerk_jwks_url(self.jwks_url)
         self._cached_jwks: dict[str, Any] | None = None
         self._cached_at: float = 0.0
 
@@ -82,9 +61,6 @@ class ClerkTokenVerifier:
 
     async def _get_jwks(self) -> dict[str, Any]:
         """Returns cached JWKS data or refreshes it from Clerk."""
-
-        if not self.jwks_url:
-            raise AuthError("Clerk JWKS URL is not configured.")
 
         now = time.time()
         if self._cached_jwks is not None and now - self._cached_at < self.cache_ttl_seconds:
@@ -148,12 +124,6 @@ class ClerkAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=503, content={"detail": "Unable to validate bearer token right now."})
 
         request.state.principal = principal
-        try:
-            auth_context = build_auth_context(principal)
-        except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-        request.state.user_id = auth_context.user_id
-        request.state.role = auth_context.role
         return await call_next(request)
 
     def _is_public_path(self, path: str) -> bool:

@@ -5,8 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Numeric, String, desc, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, desc, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -47,11 +47,9 @@ class Region(Base):
         primary_key=True,
         server_default=func.gen_random_uuid(),
     )
-    region_code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    market: Mapped[str] = mapped_column(String(80), nullable=False)
-    risk_factor: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
-    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    country: Mapped[str | None] = mapped_column(String(50))
+    timezone: Mapped[str | None] = mapped_column(String(50))
 
     inventory_snapshots: Mapped[list["InventorySnapshot"]] = relationship(back_populates="region")
     daily_sales: Mapped[list["DailySale"]] = relationship(back_populates="region")
@@ -62,7 +60,10 @@ class InventorySnapshot(Base):
     """Represents inventory on a given date for a product-region pair."""
 
     __tablename__ = "inventory_snapshots"
-    __table_args__ = (Index("ix_inventory_snapshots_product_id_snapshot_at", "product_id", "snapshot_at"),)
+    __table_args__ = (
+        UniqueConstraint("product_id", "region_id", "snapshot_date", name="uq_inventory_snapshots_product_region_date"),
+        Index("ix_inventory_snapshots_product_id_snapshot_date", "product_id", "snapshot_date"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -71,10 +72,8 @@ class InventorySnapshot(Base):
     )
     product_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("products.id"))
     region_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("regions.id"))
-    quantity: Mapped[int] = mapped_column("quantity_on_hand", Integer, nullable=False)
-    quantity_reserved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    inbound_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
 
     product: Mapped[Product | None] = relationship(back_populates="inventory_snapshots")
     region: Mapped[Region | None] = relationship(back_populates="inventory_snapshots")
@@ -129,23 +128,20 @@ class ForecastRun(Base):
     """Stores a generated forecast payload and explanation payload."""
 
     __tablename__ = "forecast_runs"
-    __table_args__ = (Index("ix_forecast_runs_product_id_generated_at_desc", "product_id", desc("generated_at")),)
+    __table_args__ = (
+        Index("ix_forecast_runs_product_id_run_at_desc", "product_id", desc("run_at")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         server_default=func.gen_random_uuid(),
     )
+    run_at: Mapped[datetime | None] = mapped_column(DateTime(), server_default=func.now())
     product_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("products.id"))
     region_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("regions.id"))
-    horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    predicted_demand_units: Mapped[int] = mapped_column(Integer, nullable=False)
-    lower_bound_units: Mapped[int] = mapped_column(Integer, nullable=False)
-    upper_bound_units: Mapped[int] = mapped_column(Integer, nullable=False)
-    stockout_probability_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
-    recommended_reorder_units: Mapped[int] = mapped_column(Integer, nullable=False)
-    model_version: Mapped[str] = mapped_column(String(32), nullable=False)
-    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    forecast_json: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    shap_json: Mapped[dict[str, object] | None] = mapped_column(JSONB)
 
     product: Mapped[Product | None] = relationship(back_populates="forecast_runs")
     region: Mapped[Region | None] = relationship(back_populates="forecast_runs")

@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Generic, Literal, TypeVar
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 SeverityLevel = Literal["low", "medium", "high", "critical"]
-UserRole = Literal["admin", "analyst", "viewer"]
-PayloadT = TypeVar("PayloadT")
 
 
 class ApiError(BaseModel):
@@ -21,33 +19,11 @@ class ApiError(BaseModel):
     error_code: str
 
 
-class ResponseMeta(BaseModel):
-    """Metadata included with every API response."""
-
-    timestamp: datetime
-    cached: bool
-
-
-class ApiEnvelope(BaseModel, Generic[PayloadT]):
-    """Standard API response envelope."""
-
-    data: PayloadT
-    meta: ResponseMeta
-
-
 class AnalyticsQuery(BaseModel):
     """Validates analytics overview requests."""
 
     region_id: UUID | None = None
     lookback_days: int = Field(default=30, ge=7, le=365)
-
-
-class DateRangeQuery(BaseModel):
-    """Validates analytics date range filters."""
-
-    start_date: date | None = None
-    end_date: date | None = None
-    region_id: UUID | None = None
 
 
 class AlertQuery(BaseModel):
@@ -256,69 +232,3 @@ class ForecastHistoryResponse(BaseModel):
 
     generated_at: datetime
     items: list[ForecastRecordResponse]
-
-
-class InventoryHistoryItem(BaseModel):
-    """Represents a historical inventory snapshot row."""
-
-    region_id: UUID
-    region_name: str
-    snapshot_date: date
-    quantity: int
-
-
-class SalesAnalyticsItem(BaseModel):
-    """Represents daily sales aggregated by region."""
-
-    region_id: UUID
-    region_name: str
-    sale_date: date
-    units_sold: int
-    revenue: float
-
-
-class InventoryTurnoverItem(BaseModel):
-    """Represents product-level inventory turnover analytics."""
-
-    product_id: UUID
-    product_name: str
-    sku: str
-    cost_of_goods: float
-    average_inventory_value: float
-    turnover_ratio: float
-
-
-class SupplierReliabilityItem(BaseModel):
-    """Represents on-time delivery performance by supplier."""
-
-    supplier_name: str
-    shipment_count: int
-    delivered_count: int
-    on_time_deliveries: int
-    on_time_rate_pct: float
-
-
-class RegionalGrowthItem(BaseModel):
-    """Represents the latest month-over-month revenue growth for a region."""
-
-    region_id: UUID
-    region_name: str
-    current_month: date
-    previous_month: date | None = None
-    revenue: float
-    previous_revenue: float
-    growth_pct: float
-
-
-class PipelineStatusItem(BaseModel):
-    """Represents the latest Prefect flow run status."""
-
-    flow_run_id: str | None = None
-    flow_name: str | None = None
-    deployment_id: str | None = None
-    deployment_name: str | None = None
-    state_type: str | None = None
-    state_name: str | None = None
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    next_scheduled_run_time: datetime | None = None

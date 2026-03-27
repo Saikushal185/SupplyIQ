@@ -1,19 +1,18 @@
 import type { SessionSnapshot } from "@/types";
-import { enrichSessionSnapshot } from "@/lib/roles";
 
 const guestTokenResolver = async (): Promise<string | null> => Promise.resolve(null);
 
-/** Default signed-out session state used before Clerk resolves a session. */
-export const guestSessionSnapshot: SessionSnapshot = enrichSessionSnapshot({
+export const guestSessionSnapshot: SessionSnapshot = {
   isLoaded: true,
   isSignedIn: false,
   userId: null,
   displayName: "Guest Operator",
   primaryEmail: null,
-  role: "viewer",
-  roleLabel: "Viewer",
-  canViewForecast: false,
-  canGenerateForecast: false,
-  canViewPipeline: false,
+  roleLabel: "Demo Mode",
   getToken: guestTokenResolver,
-});
+};
+
+/** Indicates whether Clerk keys are configured for this environment. */
+export function isClerkConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+}
