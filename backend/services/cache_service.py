@@ -58,6 +58,11 @@ class CacheService:
         serialized = json.dumps(value, default=_serialize_value)
         await self._client.setex(key, self._ttl_seconds, serialized)
 
+    async def ping(self) -> bool:
+        """Checks whether the backing Redis client is reachable."""
+
+        return bool(await self._client.ping())
+
     async def close(self) -> None:
         """Closes the underlying Redis client."""
 
