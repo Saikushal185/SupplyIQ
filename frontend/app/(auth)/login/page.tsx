@@ -17,6 +17,7 @@ export default function LoginPage() {
             <p className="text-sm text-slate-300">Required env vars:</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-400">
               <li>`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`</li>
+              <li>`CLERK_SECRET_KEY`</li>
               <li>`BACKEND_CLERK_JWKS_URL`</li>
               <li>`BACKEND_CLERK_ISSUER`</li>
               <li>`BACKEND_AUTH_ENABLED=true`</li>
@@ -42,7 +43,7 @@ export default function LoginPage() {
               </p>
               <div className="mt-10 grid gap-4 text-sm text-slate-300">
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  Protected App Router middleware for dashboard, analytics, and forecast routes
+                  Protected App Router middleware for dashboard, analytics, forecast, and pipeline routes
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   Clerk session context feeding SWR data access and backend bearer token requests
