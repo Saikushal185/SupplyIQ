@@ -123,7 +123,13 @@ class ClerkAuthMiddleware(BaseHTTPMiddleware):
         except httpx.HTTPError:
             return JSONResponse(status_code=503, content={"detail": "Unable to validate bearer token right now."})
 
+        user_id = self._extract_user_id(principal)
+        if user_id is None:
+            return JSONResponse(status_code=401, content={"detail": "Bearer token is missing a valid Clerk user id."})
+
         request.state.principal = principal
+        request.state.user_id = user_id
+        request.state.role = self._extract_role(principal)
         return await call_next(request)
 
     def _is_public_path(self, path: str) -> bool:
@@ -131,3 +137,28 @@ class ClerkAuthMiddleware(BaseHTTPMiddleware):
 
         normalized_path = path.rstrip("/") or "/"
         return normalized_path in self._public_paths
+
+    @staticmethod
+    def _extract_user_id(principal: dict[str, Any]) -> str | None:
+        """Returns the Clerk user identifier from the verified token payload."""
+
+        for key in ("sub", "user_id", "userId"):
+            value = principal.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    @staticmethod
+    def _extract_role(principal: dict[str, Any]) -> str:
+        """Returns the normalized Clerk role from token public metadata."""
+
+        for key in ("public_metadata", "publicMetadata"):
+            metadata = principal.get(key)
+            if not isinstance(metadata, dict):
+                continue
+            role = metadata.get("role")
+            if isinstance(role, str):
+                normalized = role.strip().lower()
+                if normalized in {"admin", "analyst", "viewer"}:
+                    return normalized
+        return "viewer"
