@@ -2,85 +2,47 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.dependencies import get_cache_service, get_db
-from backend.models.schemas import InventoryPositionResponse, InventoryQuery, InventoryRebalanceRequest, InventoryRebalanceResponse
+from backend.dependencies import get_db
 from backend.services import db_service
-from backend.services.cache_service import CacheService
+from backend.services.response_service import build_response
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
-def build_inventory_query(
+@router.get("/summary")
+async def get_inventory_summary(
+    session: Annotated[AsyncSession, Depends(get_db)],
     region_id: Annotated[UUID | None, Query()] = None,
-    below_reorder_only: bool = False,
-    limit: Annotated[int, Query(ge=1, le=100)] = 25,
-) -> InventoryQuery:
-    """Builds the validated inventory query model."""
+):
+    """Returns current stock levels across tracked products and regions."""
 
-    return InventoryQuery(region_id=region_id, below_reorder_only=below_reorder_only, limit=limit)
+    data = await db_service.get_inventory_summary(session, region_id=region_id)
+    return build_response(data)
 
 
-@router.get("/positions", response_model=InventoryPositionResponse)
-async def get_inventory_positions(
-    query: Annotated[InventoryQuery, Depends(build_inventory_query)],
+@router.get("/low-stock")
+async def get_low_stock(
     session: Annotated[AsyncSession, Depends(get_db)],
-    cache_service: Annotated[CacheService, Depends(get_cache_service)],
-) -> InventoryPositionResponse:
-    """Returns current inventory positions."""
+    region_id: Annotated[UUID | None, Query()] = None,
+):
+    """Returns positions that are currently below their reorder point."""
 
-    cache_key = cache_service.build_key("inventory_positions", query.model_dump())
-    cached = await cache_service.get_json(cache_key)
-    if cached is not None:
-        return InventoryPositionResponse.model_validate(cached)
-
-    response = InventoryPositionResponse(
-        generated_at=datetime.now(timezone.utc),
-        items=await db_service.list_inventory_positions(
-            session,
-            region_id=query.region_id,
-            below_reorder_only=query.below_reorder_only,
-            limit=query.limit,
-        ),
-    )
-    await cache_service.set_json(cache_key, response.model_dump())
-    return response
+    data = await db_service.get_low_stock(session, region_id=region_id)
+    return build_response(data)
 
 
-@router.get("/stockouts", response_model=InventoryPositionResponse)
-async def get_stockout_candidates(
-    query: Annotated[InventoryQuery, Depends(build_inventory_query)],
+@router.get("/{product_id}/history")
+async def get_inventory_history(
+    product_id: Annotated[UUID, Path()],
     session: Annotated[AsyncSession, Depends(get_db)],
-) -> InventoryPositionResponse:
-    """Returns inventory positions already below their reorder threshold."""
+):
+    """Returns the last 90 days of inventory snapshots for a product."""
 
-    return InventoryPositionResponse(
-        generated_at=datetime.now(timezone.utc),
-        items=await db_service.list_inventory_positions(
-            session,
-            region_id=query.region_id,
-            below_reorder_only=True,
-            limit=query.limit,
-        ),
-    )
-
-
-@router.post("/rebalance", response_model=InventoryRebalanceResponse)
-async def rebalance_inventory(
-    payload: InventoryRebalanceRequest,
-    session: Annotated[AsyncSession, Depends(get_db)],
-) -> InventoryRebalanceResponse:
-    """Moves inventory from one region to another by recording new snapshots."""
-
-    try:
-        return await db_service.rebalance_inventory(session, payload)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    data = await db_service.get_inventory_history(session, product_id=product_id, days=90)
+    return build_response(data)
