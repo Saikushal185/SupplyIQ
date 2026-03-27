@@ -10,6 +10,7 @@ const pageTitles: Record<string, string> = {
   "/dashboard": "Network Dashboard",
   "/analytics": "Analytics Studio",
   "/forecast": "Forecast Workbench",
+  "/pipeline": "Pipeline Status",
   "/login": "Authentication",
 };
 
