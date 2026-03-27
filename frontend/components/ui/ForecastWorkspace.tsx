@@ -3,8 +3,9 @@
 import { useState } from "react";
 
 import { useSessionContext } from "@/context/session-context";
-import { fetchForecastHistory, generateForecast } from "@/lib/api";
-import type { ForecastHistoryResponse, ForecastRecordResponse, InventoryPositionItem } from "@/types";
+import { generateForecast } from "@/lib/api";
+import { useForecastHistory, useLatestForecast } from "@/lib/hooks";
+import type { InventoryPositionItem } from "@/types";
 
 interface ForecastWorkspaceProps {
   positions: InventoryPositionItem[];
@@ -25,14 +26,19 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
   }));
 
   const [selectedScope, setSelectedScope] = useState<string>(scopes[0]?.key ?? "");
-  const [latestForecast, setLatestForecast] = useState<ForecastRecordResponse | null>(null);
-  const [history, setHistory] = useState<ForecastHistoryResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  const resolvedScope = scopes.find((scope) => scope.key === selectedScope);
+  const resolvedScope = scopes.find((scope) => scope.key === selectedScope) ?? null;
+  const latestForecast = useLatestForecast(resolvedScope?.productId ?? null, resolvedScope?.regionId ?? null);
+  const forecastHistory = useForecastHistory(resolvedScope?.productId ?? null);
 
   const handleGenerate = async () => {
+    if (!session.canGenerateForecast) {
+      setError("Your role can review forecasts but cannot generate them.");
+      return;
+    }
+
     if (!resolvedScope) {
       setError("Select a product and region to generate a forecast.");
       return;
@@ -42,22 +48,25 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
     setError(null);
     try {
       const token = await session.getToken();
-      const forecast = await generateForecast(
+      const response = await generateForecast(
         {
           product_id: resolvedScope.productId,
           region_id: resolvedScope.regionId,
         },
         token,
       );
-      const historyResponse = await fetchForecastHistory(resolvedScope.productId, token);
-      setLatestForecast(forecast);
-      setHistory(historyResponse);
+      await latestForecast.mutate(response, { revalidate: false });
+      await forecastHistory.mutate();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to generate a forecast.");
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  const latestForecastData = latestForecast.data?.data ?? null;
+  const historyItems = forecastHistory.data?.data ?? [];
+  const isLoadingReadState = Boolean(resolvedScope) && (!latestForecast.data || !forecastHistory.data) && !latestForecast.error && !forecastHistory.error;
 
   return (
     <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
@@ -82,14 +91,20 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
           </select>
         </label>
 
-        <button
-          type="button"
-          className="mt-5 w-full rounded-2xl bg-teal-400 px-4 py-3 font-medium text-slate-950 transition hover:bg-teal-300"
-          disabled={isSubmitting}
-          onClick={handleGenerate}
-        >
-          {isSubmitting ? "Generating..." : "Generate Forecast"}
-        </button>
+        {session.canGenerateForecast ? (
+          <button
+            type="button"
+            className="mt-5 w-full rounded-2xl bg-teal-400 px-4 py-3 font-medium text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-200"
+            disabled={isSubmitting}
+            onClick={handleGenerate}
+          >
+            {isSubmitting ? "Generating..." : "Generate Forecast"}
+          </button>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+            Forecast generation is limited to administrators and analysts.
+          </div>
+        )}
 
         {error ? <p className="mt-4 text-sm text-rose-300">{error}</p> : null}
       </div>
@@ -97,35 +112,39 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
       <div className="grid gap-6">
         <div className="rounded-3xl border border-white/10 bg-slate-950/50 p-5">
           <h3 className="text-lg font-semibold text-white">Latest Forecast</h3>
-          {latestForecast ? (
+          {isLoadingReadState ? (
+            <p className="mt-4 text-sm text-slate-400">Loading persisted forecast history...</p>
+          ) : latestForecastData ? (
             <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p className="text-sm text-slate-400">7-day demand</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.forecast_json.summary.total_units}</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{latestForecastData.forecast_json.summary.total_units}</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p className="text-sm text-slate-400">Avg Daily Units</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.forecast_json.summary.avg_daily_units}</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{latestForecastData.forecast_json.summary.avg_daily_units}</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p className="text-sm text-slate-400">Stockout probability</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.forecast_json.summary.stockout_risk_pct}%</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{latestForecastData.forecast_json.summary.stockout_risk_pct}%</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p className="text-sm text-slate-400">Recommended reorder</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{latestForecast.forecast_json.summary.recommended_reorder_units}</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{latestForecastData.forecast_json.summary.recommended_reorder_units}</p>
               </div>
             </div>
           ) : (
-            <p className="mt-4 text-sm text-slate-400">No forecast generated yet in this session.</p>
+            <p className="mt-4 text-sm text-slate-400">No forecast has been saved yet for the selected scope.</p>
           )}
         </div>
 
         <div className="rounded-3xl border border-white/10 bg-slate-950/50 p-5">
           <h3 className="text-lg font-semibold text-white">Forecast History</h3>
-          {history?.items.length ? (
+          {forecastHistory.error ? (
+            <p className="mt-4 text-sm text-rose-300">Unable to load forecast history for the selected product.</p>
+          ) : historyItems.length ? (
             <div className="mt-4 space-y-3">
-              {history.items.slice(0, 6).map((item) => (
+              {historyItems.slice(0, 6).map((item) => (
                 <div key={item.forecast_id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
