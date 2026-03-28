@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.dependencies import get_cache_service, get_db
 from backend.services import db_service
-from backend.services.analytics_service import get_regional_growth
+from backend.services.analytics_service import get_analytics_filter_options, get_regional_growth
 from backend.services.cache_service import CacheService
 from backend.services.response_service import build_response
 
@@ -61,6 +61,54 @@ async def get_sales(
                 start_date=start_date,
                 end_date=end_date,
                 region_id=region_id,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/filters")
+async def get_filters(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    cache_service: Annotated[CacheService, Depends(get_cache_service)],
+):
+    """Returns region, product, and category options for analytics filters."""
+
+    return await _load_cached_analytics_payload(
+        cache_service=cache_service,
+        namespace="analytics.filters",
+        payload={},
+        loader=lambda: get_analytics_filter_options(session),
+    )
+
+
+@router.get("/product-sales")
+async def get_product_sales(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    cache_service: Annotated[CacheService, Depends(get_cache_service)],
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+    region_id: Annotated[UUID | None, Query()] = None,
+    category: Annotated[str | None, Query()] = None,
+):
+    """Returns product-level sales summaries for the requested filters."""
+
+    try:
+        return await _load_cached_analytics_payload(
+            cache_service=cache_service,
+            namespace="analytics.product-sales",
+            payload={
+                "start_date": start_date,
+                "end_date": end_date,
+                "region_id": region_id,
+                "category": category,
+            },
+            loader=lambda: db_service.get_product_sales_summary(
+                session,
+                start_date=start_date,
+                end_date=end_date,
+                region_id=region_id,
+                category=category,
             ),
         )
     except ValueError as exc:
@@ -123,3 +171,25 @@ async def get_regional_growth_route(
         payload={},
         loader=lambda: get_regional_growth(session),
     )
+
+
+@router.get("/forecast-runs")
+async def get_forecast_runs(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    cache_service: Annotated[CacheService, Depends(get_cache_service)],
+    run_date: Annotated[date | None, Query()] = None,
+):
+    """Returns the number of forecasts generated for a specific day."""
+
+    try:
+        async def loader():
+            return {"count": await db_service.count_forecast_runs(session, run_date=run_date)}
+
+        return await _load_cached_analytics_payload(
+            cache_service=cache_service,
+            namespace="analytics.forecast-runs",
+            payload={"run_date": run_date},
+            loader=loader,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
