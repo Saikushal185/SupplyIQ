@@ -1,24 +1,26 @@
+import clsx from "clsx";
 import type { PropsWithChildren, ReactNode } from "react";
-
-import { Card, Text, Title } from "@tremor/react";
 
 interface SectionCardProps extends PropsWithChildren {
   title: string;
   subtitle: string;
   action?: ReactNode;
+  className?: string;
+  bodyClassName?: string;
 }
 
-export function SectionCard({ title, subtitle, action, children }: SectionCardProps) {
+export function SectionCard({ title, subtitle, action, className, bodyClassName, children }: SectionCardProps) {
   return (
-    <Card className="border border-white/10 bg-slate-900/80 shadow-glow">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Title className="text-white">{title}</Title>
-          <Text className="mt-2 text-slate-400">{subtitle}</Text>
+    <section className={clsx("panel-surface p-5 md:p-6", className)}>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+        <div className="space-y-2">
+          <p className="eyebrow">SupplyIQ Insight</p>
+          <h3 className="panel-title">{title}</h3>
+          <p className="max-w-3xl text-sm text-slate-400">{subtitle}</p>
         </div>
         {action}
       </div>
-      {children}
-    </Card>
+      <div className={bodyClassName}>{children}</div>
+    </section>
   );
 }
