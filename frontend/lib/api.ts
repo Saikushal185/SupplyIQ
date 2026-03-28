@@ -1,11 +1,14 @@
 import type {
+  AnalyticsFilterOptions,
   ApiEnvelope,
   ForecastGenerateRequest,
   ForecastRecordResponse,
+  ForecastRunCount,
   InventoryHistoryItem,
   InventoryPositionItem,
   InventoryTurnoverItem,
   PipelineStatus,
+  ProductSalesSummaryItem,
   RegionalGrowthItem,
   SalesAnalyticsItem,
   SupplierPerformanceItem,
@@ -113,6 +116,33 @@ export function fetchSalesAnalytics(startDate?: string, endDate?: string, region
     undefined,
     token,
   );
+}
+
+export function fetchAnalyticsFilters(token?: string | null) {
+  return request<AnalyticsFilterOptions>("/analytics/filters", undefined, token);
+}
+
+export function fetchProductSales(
+  startDate?: string,
+  endDate?: string,
+  regionId?: string,
+  category?: string,
+  token?: string | null,
+) {
+  return request<ProductSalesSummaryItem[]>(
+    `/analytics/product-sales${buildQuery({
+      start_date: startDate,
+      end_date: endDate,
+      region_id: regionId,
+      category,
+    })}`,
+    undefined,
+    token,
+  );
+}
+
+export function fetchForecastRunCount(runDate?: string, token?: string | null) {
+  return request<ForecastRunCount>(`/analytics/forecast-runs${buildQuery({ run_date: runDate })}`, undefined, token);
 }
 
 export function fetchInventoryTurnover(startDate?: string, endDate?: string, token?: string | null) {
