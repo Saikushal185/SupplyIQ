@@ -513,6 +513,50 @@ async def get_sales_analytics(
     ]
 
 
+async def get_product_sales_summary(
+    session: AsyncSession,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    region_id: UUID | None = None,
+    category: str | None = None,
+) -> list[dict[str, object]]:
+    """Returns product-level sales totals for the requested date window."""
+
+    resolved_start, resolved_end = _default_date_range(start_date=start_date, end_date=end_date)
+    statement = (
+        select(
+            Product.id,
+            Product.name,
+            Product.sku,
+            Product.category,
+            func.sum(DailySale.units_sold).label("units_sold"),
+            func.sum(func.coalesce(DailySale.revenue, 0)).label("revenue"),
+        )
+        .join(Product, DailySale.product_id == Product.id)
+        .where(DailySale.sale_date >= resolved_start, DailySale.sale_date <= resolved_end)
+        .group_by(Product.id, Product.name, Product.sku, Product.category)
+        .order_by(desc("units_sold"), Product.name.asc())
+    )
+    if region_id is not None:
+        statement = statement.where(DailySale.region_id == region_id)
+    if category:
+        statement = statement.where(Product.category == category)
+
+    rows = (await session.execute(statement)).all()
+    return [
+        {
+            "product_id": str(product_id),
+            "product_name": product_name,
+            "sku": sku,
+            "category": category_name,
+            "units_sold": int(units_sold or 0),
+            "revenue": _coerce_float(revenue),
+        }
+        for product_id, product_name, sku, category_name, units_sold, revenue in rows
+    ]
+
+
 async def get_inventory_turnover(
     session: AsyncSession,
     *,
@@ -587,6 +631,24 @@ async def get_supplier_reliability(
 
     rows = await build_supplier_performance(session, region_id=region_id)
     return [row.model_dump(mode="json") for row in rows]
+
+
+async def count_forecast_runs(
+    session: AsyncSession,
+    *,
+    run_date: date | None = None,
+) -> int:
+    """Returns the number of forecasts generated during the requested day."""
+
+    resolved_date = run_date or date.today()
+    start_dt = datetime.combine(resolved_date, time.min, tzinfo=timezone.utc)
+    end_dt = start_dt + timedelta(days=1)
+    statement = select(func.count(ForecastRun.id)).where(
+        ForecastRun.run_at >= start_dt,
+        ForecastRun.run_at < end_dt,
+    )
+    count = await session.scalar(statement)
+    return int(count or 0)
 
 
 def _normalize_forecast_payload(payload: dict[str, object] | None) -> ForecastPayload:
