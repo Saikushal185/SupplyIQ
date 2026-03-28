@@ -54,6 +54,15 @@ export interface SalesAnalyticsItem {
   revenue: number;
 }
 
+export interface ProductSalesSummaryItem {
+  product_id: string;
+  product_name: string;
+  sku: string;
+  category: string | null;
+  units_sold: number;
+  revenue: number;
+}
+
 export interface InventoryTurnoverItem {
   product_id: string;
   product_name: string;
@@ -61,6 +70,17 @@ export interface InventoryTurnoverItem {
   cost_of_goods: number;
   average_inventory_value: number;
   turnover_ratio: number;
+}
+
+export interface InventoryTurnoverTrendPeriod {
+  key: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+}
+
+export interface InventoryTurnoverTrendBucket extends InventoryTurnoverTrendPeriod {
+  rows: InventoryTurnoverItem[];
 }
 
 export interface SupplierPerformanceItem {
@@ -80,6 +100,28 @@ export interface RegionalGrowthItem {
   revenue: number;
   previous_revenue: number;
   growth_pct: number;
+}
+
+export interface AnalyticsFilterRegion {
+  region_id: string;
+  region_name: string;
+}
+
+export interface AnalyticsFilterProduct {
+  product_id: string;
+  product_name: string;
+  sku: string;
+  category: string | null;
+}
+
+export interface AnalyticsFilterOptions {
+  regions: AnalyticsFilterRegion[];
+  products: AnalyticsFilterProduct[];
+  categories: string[];
+}
+
+export interface ForecastRunCount {
+  count: number;
 }
 
 export interface DemandPoint {
