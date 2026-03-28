@@ -1,21 +1,26 @@
-import { Badge, Card, Metric, Text } from "@tremor/react";
+import { Card, Metric, Text } from "@tremor/react";
+import clsx from "clsx";
+
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
 interface StatCardProps {
   label: string;
   value: string;
   note: string;
-  accent?: string;
+  accent?: "indigo" | "cyan" | "amber" | "rose" | "emerald";
 }
 
-export function StatCard({ label, value, note, accent = "teal" }: StatCardProps) {
+export function StatCard({ label, value, note, accent = "indigo" }: StatCardProps) {
   return (
-    <Card className="border border-white/10 bg-slate-900/80 shadow-glow">
-      <Text className="text-slate-400">{label}</Text>
-      <Metric className="mt-3 text-white">{value}</Metric>
-      <div className="mt-4 flex items-center justify-between">
-        <Text className="max-w-[18rem] text-slate-400">{note}</Text>
-        <Badge color={accent as "teal" | "orange" | "rose"}>{accent}</Badge>
+    <Card className="rounded-[28px] border border-white/10 bg-app-surface/90 p-5 shadow-panel ring-0">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <Text className="text-slate-400">{label}</Text>
+          <Metric className={clsx("mono-data mt-4 text-white")}>{value}</Metric>
+        </div>
+        <StatusBadge label={accent} variant={accent} />
       </div>
+      <p className="mt-4 text-sm text-slate-400">{note}</p>
     </Card>
   );
 }
