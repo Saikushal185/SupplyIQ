@@ -70,15 +70,7 @@ backend/ml/artifacts/*
 .claude
 .codex/
 
-# Test, temp, and scratch files
-test_*.py
-*_test.py
-*.test.ts
-*.test.tsx
-*.spec.ts
-*.spec.tsx
-test.py
-test.ts
+# Scratch files and ad hoc sandboxes
 temp.py
 temp.ts
 scratch.py
@@ -87,9 +79,6 @@ playground.py
 playground.ts
 debug.py
 debug.ts
-**/__tests__/**
-**/tests/**
-**/test/**
 **/temp/**
 **/scratch/**
 **/.sandbox/**
