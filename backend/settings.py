@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource, EnvSettingsSource
@@ -52,8 +52,14 @@ class Settings(BaseSettings):
 
     app_name: str = "SupplyIQ API"
     api_prefix: str = "/api/v1"
-    database_url: str = "postgresql+psycopg://supplyiq:supplyiq@localhost:5432/supplyiq"
-    redis_url: str = "redis://localhost:6379/0"
+    database_url: str = Field(
+        default="postgresql+psycopg://supplyiq:supplyiq@localhost:5432/supplyiq",
+        validation_alias=AliasChoices("BACKEND_DATABASE_URL", "DATABASE_URL"),
+    )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias=AliasChoices("BACKEND_REDIS_URL", "REDIS_URL"),
+    )
     model_artifact_path: Path = BACKEND_DIR / "ml" / "artifacts" / "forecast_model.joblib"
     cache_ttl_seconds: int = 300
     clerk_jwks_cache_ttl_seconds: int = 300
@@ -62,9 +68,38 @@ class Settings(BaseSettings):
     clerk_jwks_url: str | None = None
     clerk_issuer: str | None = None
     clerk_audience: str | None = None
-    prefect_api_url: str | None = None
-    prefect_api_key: str | None = None
-    prefect_flow_name: str | None = None
+    prefect_api_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BACKEND_PREFECT_API_URL", "PREFECT_API_URL"),
+    )
+    prefect_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BACKEND_PREFECT_API_KEY", "PREFECT_API_KEY"),
+    )
+    prefect_flow_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BACKEND_PREFECT_FLOW_NAME", "PREFECT_FLOW_NAME"),
+    )
+    clerk_secret_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BACKEND_CLERK_SECRET_KEY", "CLERK_SECRET_KEY"),
+    )
+    openweathermap_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BACKEND_OPENWEATHERMAP_API_KEY", "OPENWEATHERMAP_API_KEY"),
+    )
+    resend_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BACKEND_RESEND_API_KEY", "RESEND_API_KEY"),
+    )
+    alert_email_from: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BACKEND_ALERT_EMAIL_FROM", "ALERT_EMAIL_FROM"),
+    )
+    alert_email_to: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BACKEND_ALERT_EMAIL_TO", "ALERT_EMAIL_TO"),
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="BACKEND_",
