@@ -41,6 +41,9 @@ class Region(Base):
     """Represents an operating region."""
 
     __tablename__ = "regions"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_regions_name"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -84,6 +87,7 @@ class DailySale(Base):
 
     __tablename__ = "daily_sales"
     __table_args__ = (
+        UniqueConstraint("product_id", "region_id", "sale_date", name="uq_daily_sales_product_region_date"),
         Index("ix_daily_sales_product_id_sale_date", "product_id", "sale_date"),
     )
 
