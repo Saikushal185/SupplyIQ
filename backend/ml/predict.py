@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from statistics import mean
+from statistics import mean, pstdev
 from typing import TYPE_CHECKING, Any, Sequence
 
 try:
@@ -60,6 +60,72 @@ class SalesObservation:
     traffic_index: float | None
     product_id: Any | None = None
     region_id: Any | None = None
+
+
+@dataclass(slots=True)
+class SeasonalBaselineModel:
+    """Lightweight seasonal fallback when Prophet cannot initialize."""
+
+    overall_mean: float
+    weekday_means: dict[int, float]
+    month_means: dict[int, float]
+    uncertainty: float
+    anchor_date: date
+
+    def predict_dates(self, dates: Sequence[date]) -> list[dict[str, object]]:
+        """Builds Prophet-shaped forecast rows for the requested dates."""
+
+        rows: list[dict[str, object]] = []
+        for forecast_date in dates:
+            weekday_mean = self.weekday_means.get(forecast_date.weekday(), self.overall_mean)
+            month_mean = self.month_means.get(forecast_date.month, self.overall_mean)
+            yhat = max(round((weekday_mean * 0.65) + (month_mean * 0.35), 2), 0.0)
+            spread = max(self.uncertainty, yhat * 0.1, 2.0)
+            rows.append(
+                {
+                    "date": forecast_date.isoformat(),
+                    "yhat": yhat,
+                    "yhat_lower": max(round(yhat - spread, 2), 0.0),
+                    "yhat_upper": round(yhat + spread, 2),
+                }
+            )
+        return rows
+
+
+def build_seasonal_baseline_model(history_rows: Sequence[dict[str, object]]) -> tuple[SeasonalBaselineModel, list[float]]:
+    """Builds a serializable seasonal baseline model from engineered history rows."""
+
+    if not history_rows:
+        raise ValueError("history_rows must contain at least one observation.")
+
+    observed_units = [_coerce_float(row.get("y")) for row in history_rows]
+    weekday_buckets: dict[int, list[float]] = {}
+    month_buckets: dict[int, list[float]] = {}
+    for row in history_rows:
+        weekday_buckets.setdefault(int(_coerce_float(row.get("day_of_week"))), []).append(_coerce_float(row.get("y")))
+        month_buckets.setdefault(int(_coerce_float(row.get("month"))), []).append(_coerce_float(row.get("y")))
+
+    model = SeasonalBaselineModel(
+        overall_mean=mean(observed_units),
+        weekday_means={bucket: mean(values) for bucket, values in weekday_buckets.items()},
+        month_means={bucket: mean(values) for bucket, values in month_buckets.items()},
+        uncertainty=max(pstdev(observed_units), 2.0) if len(observed_units) > 1 else 2.0,
+        anchor_date=_coerce_date(history_rows[-1]["ds"]),
+    )
+    in_sample_predictions = [
+        max(
+            round(
+                (
+                    model.weekday_means.get(int(_coerce_float(row.get("day_of_week"))), model.overall_mean) * 0.65
+                    + model.month_means.get(int(_coerce_float(row.get("month"))), model.overall_mean) * 0.35
+                ),
+                2,
+            ),
+            0.0,
+        )
+        for row in history_rows
+    ]
+    return model, in_sample_predictions
 
 
 def _safe_load_artifact(path: Path) -> Any | None:
@@ -381,6 +447,11 @@ def _forecast_prophet_baseline(prophet_model: Any, *, periods: int = 7) -> list[
         raise RuntimeError(
             "Prophet artifact is not loaded. Train the hybrid model before generating forecasts."
         )
+
+    if hasattr(prophet_model, "predict_dates"):
+        anchor_date = getattr(prophet_model, "anchor_date", date.today())
+        future_dates = [anchor_date + timedelta(days=offset) for offset in range(1, periods + 1)]
+        return prophet_model.predict_dates(future_dates)
 
     future_frame = prophet_model.make_future_dataframe(periods=periods, include_history=False)
     forecast_frame = prophet_model.predict(future_frame)
