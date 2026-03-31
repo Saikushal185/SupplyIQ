@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 CREATE TABLE IF NOT EXISTS regions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(100) NOT NULL,
+    name VARCHAR(100) UNIQUE NOT NULL,
     country VARCHAR(50),
     timezone VARCHAR(50)
 );
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS daily_sales (
     units_sold INTEGER NOT NULL,
     revenue NUMERIC(12,2),
     weather_temp NUMERIC(5,2),
-    traffic_index NUMERIC(4,2)
+    traffic_index NUMERIC(4,2),
+    UNIQUE (product_id, region_id, sale_date)
 );
 
 CREATE TABLE IF NOT EXISTS supplier_shipments (
