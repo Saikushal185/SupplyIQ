@@ -72,6 +72,13 @@ def _extract_public_metadata(principal: dict[str, Any]) -> dict[str, Any]:
 def get_auth_context(request: Request) -> AuthContext:
     """Returns the active authentication context extracted by middleware."""
 
+    if not get_settings().auth_enabled:
+        return AuthContext(
+            user_id="demo-operator",
+            role="admin",
+            claims={"sub": "demo-operator", "role": "admin", "mode": "demo"},
+        )
+
     principal = getattr(request.state, "principal", None)
     user_id = getattr(request.state, "user_id", None)
     role = getattr(request.state, "role", None)
