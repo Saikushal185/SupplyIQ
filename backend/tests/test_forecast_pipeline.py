@@ -170,6 +170,23 @@ class ForecastPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(alert["current_stock_level"], 95)
         self.assertEqual(alert["remaining_inventory"], 55)
 
+    def test_fit_prophet_falls_back_to_seasonal_baseline_when_backend_init_fails(self) -> None:
+        history_rows = predict.engineer_history_features(_build_observations())
+
+        class _BrokenProphet:
+            def __init__(self, *args, **kwargs) -> None:
+                raise AttributeError("stan_backend")
+
+        with patch.object(train, "_require_dependency", return_value=SimpleNamespace(Prophet=_BrokenProphet)):
+            model, predictions = train._fit_prophet(history_rows)
+
+        self.assertIsInstance(model, predict.SeasonalBaselineModel)
+        self.assertEqual(len(predictions), len(history_rows))
+        self.assertTrue(all(value >= 0 for value in predictions))
+        future_rows = predict._forecast_prophet_baseline(model, periods=3)
+        self.assertEqual(len(future_rows), 3)
+        self.assertIn("yhat", future_rows[0])
+
     async def test_generate_forecast_combines_baseline_residuals_persists_and_sends_email(self) -> None:
         product_id = uuid4()
         region_id = uuid4()
