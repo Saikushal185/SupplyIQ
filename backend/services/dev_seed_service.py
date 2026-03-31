@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.models.db_models import DailySale, Product, Region, SupplierShipment
-from pipeline.tasks.extract import extract_seed_supply_data
+from infra.seed import build_seed_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ async def seed_local_analytics_data_if_needed(session_factory: async_sessionmake
             logger.warning("Skipping local analytics seed because product or region reference data is unavailable.")
             return
 
-        seed_payload = extract_seed_supply_data.fn() if hasattr(extract_seed_supply_data, "fn") else extract_seed_supply_data()
+        seed_payload = build_seed_dataset(end_date=date.today() - timedelta(days=1), days=730)
         inserted_sales = 0
         inserted_shipments = 0
 
@@ -53,21 +54,7 @@ async def seed_local_analytics_data_if_needed(session_factory: async_sessionmake
             inserted_sales = len(seed_payload["daily_sales"])
 
         if shipment_count == 0:
-            session.add_all(
-                [
-                    SupplierShipment(
-                        product_id=product_ids[str(row["sku"])],
-                        supplier_name=str(row["supplier_name"]),
-                        expected_date=row["expected_date"],
-                        actual_date=row["actual_date"],
-                        quantity=int(row["quantity"]) if row["quantity"] is not None else None,
-                        status=str(row["status"]) if row["status"] is not None else None,
-                    )
-                    for row in seed_payload["supplier_shipments"]
-                    if str(row["sku"]) in product_ids
-                ]
-            )
-            inserted_shipments = len(seed_payload["supplier_shipments"])
+            inserted_shipments = 0
 
         if inserted_sales or inserted_shipments:
             await session.commit()
