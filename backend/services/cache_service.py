@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from backend.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_value(value: object) -> object:
@@ -47,7 +51,11 @@ class CacheService:
     async def get_json(self, key: str) -> dict[str, object] | list[object] | None:
         """Returns cached JSON data if it exists."""
 
-        raw_value = await self._client.get(key)
+        try:
+            raw_value = await self._client.get(key)
+        except (RedisError, OSError, RuntimeError) as exc:
+            logger.warning("Redis get failed for %s: %s", key, exc)
+            return None
         if raw_value is None:
             return None
         return json.loads(raw_value)
@@ -56,14 +64,24 @@ class CacheService:
         """Stores JSON-serializable data in Redis with the default TTL."""
 
         serialized = json.dumps(value, default=_serialize_value)
-        await self._client.setex(key, self._ttl_seconds, serialized)
+        try:
+            await self._client.setex(key, self._ttl_seconds, serialized)
+        except (RedisError, OSError, RuntimeError) as exc:
+            logger.warning("Redis set failed for %s: %s", key, exc)
 
     async def ping(self) -> bool:
         """Checks whether the backing Redis client is reachable."""
 
-        return bool(await self._client.ping())
+        try:
+            return bool(await self._client.ping())
+        except (RedisError, OSError, RuntimeError) as exc:
+            logger.warning("Redis ping failed: %s", exc)
+            return False
 
     async def close(self) -> None:
         """Closes the underlying Redis client."""
 
-        await self._client.aclose()
+        try:
+            await self._client.aclose()
+        except (RedisError, OSError, RuntimeError):
+            logger.warning("Redis close failed.", exc_info=True)
