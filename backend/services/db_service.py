@@ -121,6 +121,14 @@ def _snapshot_created_at(snapshot_date: date) -> datetime:
     return datetime.combine(snapshot_date, time.min, tzinfo=timezone.utc)
 
 
+def utc_day_bounds(target_date: date) -> tuple[datetime, datetime]:
+    """Builds naive UTC day bounds for timestamp-without-time-zone columns."""
+
+    start_dt = datetime.combine(target_date, time.min)
+    end_dt = start_dt + timedelta(days=1)
+    return start_dt, end_dt
+
+
 def _default_date_range(
     *,
     start_date: date | None,
@@ -641,8 +649,7 @@ async def count_forecast_runs(
     """Returns the number of forecasts generated during the requested day."""
 
     resolved_date = run_date or date.today()
-    start_dt = datetime.combine(resolved_date, time.min, tzinfo=timezone.utc)
-    end_dt = start_dt + timedelta(days=1)
+    start_dt, end_dt = utc_day_bounds(resolved_date)
     statement = select(func.count(ForecastRun.id)).where(
         ForecastRun.run_at >= start_dt,
         ForecastRun.run_at < end_dt,
