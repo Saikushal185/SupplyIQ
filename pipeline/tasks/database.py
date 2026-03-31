@@ -8,9 +8,13 @@ import os
 def get_pipeline_database_url() -> str:
     """Reads the pipeline database URL from the environment."""
 
-    database_url = os.getenv("PIPELINE_DATABASE_URL") or os.getenv("BACKEND_DATABASE_URL")
+    database_url = (
+        os.getenv("PIPELINE_DATABASE_URL")
+        or os.getenv("BACKEND_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+    )
     if not database_url:
-        raise RuntimeError("PIPELINE_DATABASE_URL must be set for pipeline loading.")
+        raise RuntimeError("DATABASE_URL must be set for pipeline loading.")
     return database_url
 
 
