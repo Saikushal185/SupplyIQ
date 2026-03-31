@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     env_file:
       - ./.env
     ports:
@@ -27,51 +27,35 @@ services:
     env_file:
       - ./backend/.env
     volumes:
+      - ./backend:/app/backend
+      - ./pipeline:/app/pipeline
+      - ./infra:/app/infra
       - model_artifacts:/app/backend/ml/artifacts
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
-      pipeline:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health').read()"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
 
   frontend:
     build:
       context: .
       dockerfile: infra/Dockerfile.frontend
     env_file:
-      - ./frontend/.env
+      - ./frontend/.env.local
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
-        condition: service_healthy
-
-  pipeline:
-    build:
-      context: .
-      dockerfile: infra/Dockerfile.backend
-    env_file:
-      - ./pipeline/.env
-      - ./backend/.env
-    volumes:
-      - model_artifacts:/app/backend/ml/artifacts
-    command: ["sh", "-c", "python -m pipeline.flows.ingestion_flow && python backend/ml/train.py && python -m pipeline.flows.alert_flow"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
         condition: service_started
-    restart: "no"
 
 volumes:
   postgres_data:
