@@ -15,9 +15,11 @@ except ModuleNotFoundError:  # pragma: no cover - dependency exists in the runti
 
 from backend.ml.predict import (
     ARTIFACT_DIR,
+    _forecast_prophet_baseline,
     build_feature_matrix,
     build_future_feature_rows,
     build_prophet_artifact_path,
+    build_seasonal_baseline_model,
     engineer_history_features,
     summarize_feature_impacts,
     SalesObservation,
@@ -141,12 +143,16 @@ def _fit_prophet(history_rows: list[dict[str, object]]) -> tuple[Any, list[float
     """Fits a scoped Prophet model and returns in-sample yhat predictions."""
 
     prophet_module = _require_dependency("prophet")
-    prophet_model = prophet_module.Prophet(yearly_seasonality=True, weekly_seasonality=True)
-    prophet_frame = _build_prophet_frame(history_rows)
-    prophet_model.fit(prophet_frame)
-    in_sample_forecast = prophet_model.predict(prophet_frame[["ds"]])
-    yhat = in_sample_forecast["yhat"].tolist() if hasattr(in_sample_forecast["yhat"], "tolist") else list(in_sample_forecast["yhat"])
-    return prophet_model, [float(value) for value in yhat]
+    try:
+        prophet_model = prophet_module.Prophet(yearly_seasonality=True, weekly_seasonality=True)
+        prophet_frame = _build_prophet_frame(history_rows)
+        prophet_model.fit(prophet_frame)
+        in_sample_forecast = prophet_model.predict(prophet_frame[["ds"]])
+        yhat = in_sample_forecast["yhat"].tolist() if hasattr(in_sample_forecast["yhat"], "tolist") else list(in_sample_forecast["yhat"])
+        return prophet_model, [float(value) for value in yhat]
+    except Exception as exc:
+        logger.warning("Falling back to seasonal baseline because Prophet initialization failed: %s", exc)
+        return build_seasonal_baseline_model(history_rows)
 
 
 def _fit_xgb_residual_model(
@@ -217,15 +223,13 @@ def persist_models() -> dict[str, Path]:
         global_feature_rows.extend(scoped_history_rows)
         global_prophet_predictions.extend(scoped_prophet_predictions)
 
-        future_forecast = prophet_model.predict(
-            prophet_model.make_future_dataframe(periods=7, include_history=False)
-        )
-        future_dates = future_forecast["ds"].tolist() if hasattr(future_forecast["ds"], "tolist") else list(future_forecast["ds"])
-        future_yhat = future_forecast["yhat"].tolist() if hasattr(future_forecast["yhat"], "tolist") else list(future_forecast["yhat"])
+        future_forecast = _forecast_prophet_baseline(prophet_model, periods=7)
+        future_dates = [date.fromisoformat(str(row["date"])) for row in future_forecast]
+        future_yhat = [float(row["yhat"]) for row in future_forecast]
         preview_feature_rows = build_future_feature_rows(
             scoped_history_rows,
-            [value.date() if hasattr(value, "date") else value for value in future_dates],
-            [float(value) for value in future_yhat],
+            future_dates,
+            future_yhat,
         )
 
     if not global_feature_rows:
