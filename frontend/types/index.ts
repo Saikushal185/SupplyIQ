@@ -1,4 +1,3 @@
-export type UserRole = "admin" | "analyst" | "viewer";
 export type SeverityLevel = "low" | "medium" | "high" | "critical";
 
 export interface ApiMeta {
@@ -12,17 +11,9 @@ export interface ApiEnvelope<T> {
 }
 
 export interface SessionSnapshot {
-  isLoaded: boolean;
-  isSignedIn: boolean;
-  userId: string | null;
   displayName: string;
   primaryEmail: string | null;
-  role: UserRole;
   roleLabel: string;
-  canViewForecast: boolean;
-  canGenerateForecast: boolean;
-  canViewPipeline: boolean;
-  getToken: () => Promise<string | null>;
 }
 
 export interface InventoryPositionItem {
@@ -35,15 +26,6 @@ export interface InventoryPositionItem {
   snapshot_date: string;
   reorder_point: number | null;
   risk_level: SeverityLevel;
-}
-
-export interface InventoryHistoryItem {
-  product_id: string;
-  product_name: string;
-  region_id: string;
-  region_name: string;
-  snapshot_date: string;
-  quantity: number;
 }
 
 export interface SalesAnalyticsItem {
