@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.ml import predict
@@ -15,8 +17,6 @@ class ForecastService:
         self,
         session: AsyncSession,
         request: ForecastGenerateRequest,
-        *,
-        user_email: str | None = None,
     ):
         """Generates and persists a seven-day forecast for a product-region pair."""
 
@@ -24,5 +24,21 @@ class ForecastService:
             request.product_id,
             request.region_id,
             session,
-            user_email=user_email,
         )
+
+    async def generate_batch_forecast(
+        self,
+        session: AsyncSession,
+        requests: list[ForecastGenerateRequest],
+    ) -> list[object]:
+        """Generates forecasts for multiple product-region pairs concurrently."""
+
+        tasks = [
+            predict.generate_forecast(req.product_id, req.region_id, session)
+            for req in requests
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return [
+            {"error": str(result)} if isinstance(result, Exception) else result
+            for result in results
+        ]
