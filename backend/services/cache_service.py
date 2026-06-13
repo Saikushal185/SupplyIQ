@@ -78,6 +78,29 @@ class CacheService:
             logger.warning("Redis ping failed: %s", exc)
             return False
 
+    async def delete_key(self, key: str) -> bool:
+        """Deletes a single cache key. Returns True if the key existed."""
+
+        try:
+            deleted = await self._client.delete(key)
+            return bool(deleted)
+        except (RedisError, OSError, RuntimeError) as exc:
+            logger.warning("Redis delete failed for %s: %s", key, exc)
+            return False
+
+    async def clear_namespace(self, namespace: str) -> int:
+        """Deletes all keys matching a namespace prefix. Returns count deleted."""
+
+        pattern = f"supplyiq:{namespace}:*"
+        try:
+            keys = [key async for key in self._client.scan_iter(match=pattern)]
+            if not keys:
+                return 0
+            return int(await self._client.delete(*keys))
+        except (RedisError, OSError, RuntimeError) as exc:
+            logger.warning("Redis clear_namespace failed for %s: %s", namespace, exc)
+            return 0
+
     async def close(self) -> None:
         """Closes the underlying Redis client."""
 
