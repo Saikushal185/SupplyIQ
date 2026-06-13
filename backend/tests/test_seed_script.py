@@ -57,6 +57,25 @@ class SeedScriptTests(unittest.TestCase):
             electronics_holiday_units - electronics_summer_units,
         )
 
+    def test_seed_dataset_includes_unique_supplier_shipments_for_every_product(self) -> None:
+        dataset = seed.build_seed_dataset(
+            end_date=date(2026, 3, 31),
+            days=730,
+        )
+
+        shipments = dataset["supplier_shipments"]
+        self.assertTrue(shipments)
+        self.assertEqual(
+            {str(row["sku"]) for row in shipments},
+            {str(product["sku"]) for product in dataset["products"]},
+        )
+        self.assertLessEqual(
+            {str(row["status"]) for row in shipments},
+            {"delivered", "delayed", "in_transit"},
+        )
+        upsert_keys = {(str(row["sku"]), str(row["supplier_name"]), row["expected_date"]) for row in shipments}
+        self.assertEqual(len(upsert_keys), len(shipments))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -235,13 +235,10 @@ class ForecastPipelineTests(unittest.IsolatedAsyncioTestCase):
             patch.object(predict, "build_future_feature_rows", return_value=future_rows),
             patch.object(predict, "_save_forecast_run", AsyncMock(return_value=persisted_payload)) as save_mock,
         ):
-            email_sender = AsyncMock()
             result = await predict.generate_forecast(
                 product_id,
                 region_id,
                 db_session=object(),
-                user_email="planner@supplyiq.test",
-                email_sender=email_sender,
             )
 
         self.assertEqual(result, persisted_payload)
@@ -252,7 +249,6 @@ class ForecastPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved_forecast["predictions"][0]["units"], 30)
         saved_shap = save_mock.await_args.kwargs["shap_json"]
         self.assertEqual(len(saved_shap["top_features"]), 5)
-        email_sender.assert_awaited_once()
 
 
 if __name__ == "__main__":

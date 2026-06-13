@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import json
 import unittest
 from datetime import date
-from types import SimpleNamespace
-from unittest.mock import patch
 
-from backend import dependencies
 from backend.services import db_service
 from backend.services.cache_service import CacheService
 
@@ -35,16 +31,6 @@ class RuntimeFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(cached)
         self.assertFalse(ping_ok)
-
-    def test_get_auth_context_returns_demo_admin_when_auth_is_disabled(self) -> None:
-        request = SimpleNamespace(state=SimpleNamespace())
-
-        with patch.object(dependencies, "get_settings", return_value=SimpleNamespace(auth_enabled=False)):
-            auth_context = dependencies.get_auth_context(request)
-
-        self.assertEqual(auth_context.user_id, "demo-operator")
-        self.assertEqual(auth_context.role, "admin")
-        self.assertEqual(auth_context.claims, {"sub": "demo-operator", "role": "admin", "mode": "demo"})
 
     def test_utc_day_bounds_are_timezone_normalized_for_timestamp_columns(self) -> None:
         start_dt, end_dt = db_service.utc_day_bounds(date(2026, 3, 31))

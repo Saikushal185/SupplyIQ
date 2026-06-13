@@ -28,7 +28,7 @@ class _InMemoryCacheService:
         self._data[key] = value
 
 
-def _build_router_app(*, role: str = "admin") -> FastAPI:
+def _build_router_app() -> FastAPI:
     app = FastAPI()
     app.state.cache_service = _InMemoryCacheService()
     app.state.forecast_service = SimpleNamespace(generate_forecast=AsyncMock())
@@ -37,12 +37,6 @@ def _build_router_app(*, role: str = "admin") -> FastAPI:
     app.include_router(inventory.router, prefix="/api/v1")
     app.include_router(pipeline.router, prefix="/api/v1")
     app.dependency_overrides[dependencies.get_db] = lambda: object()
-    app.dependency_overrides[dependencies.get_auth_context] = lambda: dependencies.AuthContext(
-        user_id="user_123",
-        role=role,
-        claims={"sub": "user_123"},
-    )
-    app.dependency_overrides[dependencies.get_current_user_email] = lambda: "planner@supplyiq.test"
     return app
 
 
@@ -68,7 +62,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("timestamp", body["meta"])
 
     def test_sales_endpoint_caches_responses_and_marks_cached_meta(self) -> None:
-        app = _build_router_app(role="analyst")
+        app = _build_router_app()
         sales_rows = [
             {
                 "region_id": str(uuid4()),
@@ -92,7 +86,7 @@ class ApiContractTests(unittest.TestCase):
         sales_mock.assert_awaited_once()
 
     def test_analytics_filters_endpoint_returns_cached_filter_options(self) -> None:
-        app = _build_router_app(role="viewer")
+        app = _build_router_app()
         filter_options = {
             "regions": [
                 {
@@ -127,7 +121,7 @@ class ApiContractTests(unittest.TestCase):
         filters_mock.assert_awaited_once()
 
     def test_product_sales_and_forecast_run_endpoints_return_enveloped_payloads(self) -> None:
-        app = _build_router_app(role="analyst")
+        app = _build_router_app()
         product_sales_rows = [
             {
                 "product_id": str(uuid4()),
@@ -155,8 +149,8 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(product_sales_response.json()["data"][0]["category"], "Scanning")
         self.assertEqual(forecast_runs_response.json()["data"]["count"], 4)
 
-    def test_forecast_generation_forbids_viewers(self) -> None:
-        app = _build_router_app(role="viewer")
+    def test_forecast_generation_returns_enveloped_payload(self) -> None:
+        app = _build_router_app()
         app.state.forecast_service.generate_forecast = AsyncMock(
             return_value={
                 "forecast_id": str(uuid4()),
@@ -188,10 +182,11 @@ class ApiContractTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["product_name"], "Scanner")
 
     def test_inventory_summary_returns_standard_response_envelope(self) -> None:
-        app = _build_router_app(role="viewer")
+        app = _build_router_app()
         summary_rows = [
             {
                 "product_id": str(uuid4()),
@@ -215,7 +210,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertFalse(response.json()["meta"]["cached"])
 
     def test_inventory_history_returns_enveloped_snapshot_rows(self) -> None:
-        app = _build_router_app(role="viewer")
+        app = _build_router_app()
         product_id = uuid4()
         history_rows = [
             {
@@ -245,7 +240,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertFalse(response.json()["meta"]["cached"])
 
     def test_remaining_analytics_endpoints_return_enveloped_payloads(self) -> None:
-        app = _build_router_app(role="analyst")
+        app = _build_router_app()
         turnover_rows = [
             {
                 "product_id": str(uuid4()),
@@ -296,7 +291,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(growth_response.json()["data"][0]["growth_pct"], 25.0)
 
     def test_forecast_read_endpoints_return_enveloped_data_for_analysts(self) -> None:
-        app = _build_router_app(role="analyst")
+        app = _build_router_app()
         product_id = uuid4()
         region_id = uuid4()
         forecast_record = {
@@ -332,33 +327,29 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(latest_response.json()["data"]["product_name"], "Scanner")
         self.assertEqual(len(history_response.json()["data"]), 1)
 
-    def test_pipeline_status_is_admin_only(self) -> None:
-        viewer_client = TestClient(_build_router_app(role="viewer"))
-        viewer_response = viewer_client.get("/api/v1/pipeline/status")
-
-        self.assertEqual(viewer_response.status_code, 403)
-
-        admin_app = _build_router_app(role="admin")
+    def test_pipeline_status_returns_enveloped_payload(self) -> None:
+        app = _build_router_app()
         with patch(
             "backend.routers.pipeline.get_latest_pipeline_status",
             AsyncMock(
                 return_value={
                     "flow_run_id": "flow-run-1",
-                    "flow_name": "ingestion",
-                    "deployment_id": "deployment-1",
-                    "deployment_name": "ingestion",
+                    "flow_name": "supplyiq-ingestion-flow",
+                    "deployment_id": None,
+                    "deployment_name": None,
                     "state_type": "COMPLETED",
                     "state_name": "Completed",
                     "start_time": "2026-03-26T06:00:00Z",
                     "end_time": "2026-03-26T06:05:00Z",
+                    "next_scheduled_run_time": None,
                 }
             ),
         ):
-            admin_client = TestClient(admin_app)
-            admin_response = admin_client.get("/api/v1/pipeline/status")
+            client = TestClient(app)
+            response = client.get("/api/v1/pipeline/status")
 
-        self.assertEqual(admin_response.status_code, 200)
-        self.assertEqual(admin_response.json()["data"]["state_name"], "Completed")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["state_name"], "Completed")
 
 
 if __name__ == "__main__":

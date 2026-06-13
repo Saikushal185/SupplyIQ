@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import unittest
 from datetime import UTC, date, datetime
-from pathlib import Path
 from uuid import uuid4
 
-from pipeline.flows import alert_flow
 from pipeline.tasks import extract, load, transform
 
 
@@ -40,12 +37,6 @@ class _FakeRedis:
 
 
 class PipelineIngestionTests(unittest.TestCase):
-    def test_prefect_yaml_declares_daily_2am_utc_schedule(self) -> None:
-        prefect_yaml = Path("pipeline/prefect.yaml").read_text(encoding="utf-8")
-
-        self.assertIn("cron: 0 2 * * *", prefect_yaml)
-        self.assertIn("timezone: UTC", prefect_yaml)
-
     def test_seasonality_and_time_of_day_factors_follow_requested_shape(self) -> None:
         self.assertGreater(
             extract.seasonal_multiplier("electronics", 11),
@@ -110,7 +101,7 @@ class PipelineIngestionTests(unittest.TestCase):
         product_id = uuid4()
         region_id = uuid4()
 
-        transformed = transform.transform_supply_data.fn(
+        transformed = transform.transform_supply_data(
             {
                 "products": [
                     {
@@ -202,68 +193,20 @@ class PipelineIngestionTests(unittest.TestCase):
             ["analytics:sales:1", "supplyiq:analytics:2"],
         )
 
-    def test_alert_rate_limit_sends_once_per_product_per_day(self) -> None:
+    def test_record_last_run_stores_run_summary_with_daily_ttl(self) -> None:
         redis_client = _FakeRedis()
-        product_id = uuid4()
-        now = datetime(2026, 3, 31, 2, 0, tzinfo=UTC)
 
-        first = alert_flow.should_send_inventory_alert(
+        load.record_last_run(
             redis_client,
-            product_id=product_id,
-            now=now,
-        )
-        second = alert_flow.should_send_inventory_alert(
-            redis_client,
-            product_id=product_id,
-            now=now,
+            {"daily_sales": 100},
+            started_at="2026-03-31T02:00:00+00:00",
+            completed_at="2026-03-31T02:01:00+00:00",
         )
 
-        self.assertTrue(first)
-        self.assertFalse(second)
-        self.assertEqual(redis_client.setex_calls[0][1], 86400)
-
-    def test_dispatch_inventory_alerts_skips_rate_limited_products(self) -> None:
-        redis_client = _FakeRedis()
-        sent: list[tuple[str, str]] = []
-
-        async def _email_sender(*, product_name: str, region_name: str, recipient_email: str, quantity: int, reorder_point: int) -> bool:
-            sent.append((product_name, recipient_email))
-            return True
-
-        rows = [
-            {
-                "product_id": uuid4(),
-                "product_name": "Scanner",
-                "region_name": "North",
-                "quantity": 10,
-                "reorder_point": 20,
-            }
-        ]
-
-        first_result = asyncio.run(
-            alert_flow.dispatch_inventory_alerts(
-                rows,
-                redis_client=redis_client,
-                recipient_email="alerts@supplyiq.test",
-                email_sender=_email_sender,
-                now=datetime(2026, 3, 31, 2, 0, tzinfo=UTC),
-            )
-        )
-        second_result = asyncio.run(
-            alert_flow.dispatch_inventory_alerts(
-                rows,
-                redis_client=redis_client,
-                recipient_email="alerts@supplyiq.test",
-                email_sender=_email_sender,
-                now=datetime(2026, 3, 31, 3, 0, tzinfo=UTC),
-            )
-        )
-
-        self.assertEqual(first_result["sent"], 1)
-        self.assertEqual(second_result["sent"], 0)
-        self.assertEqual(first_result["rate_limited"], 0)
-        self.assertEqual(second_result["rate_limited"], 1)
-        self.assertEqual(sent, [("Scanner", "alerts@supplyiq.test")])
+        self.assertEqual(len(redis_client.setex_calls), 1)
+        key, ttl_seconds, _ = redis_client.setex_calls[0]
+        self.assertEqual(key, load.LAST_RUN_KEY)
+        self.assertEqual(ttl_seconds, 86400)
 
 
 if __name__ == "__main__":

@@ -1,97 +1,91 @@
 # SupplyIQ
 
-SupplyIQ is a supply chain intelligence platform with a FastAPI backend, a Next.js frontend, and a Prefect ingestion pipeline that refreshes operational demand signals every day at `02:00 UTC`.
+SupplyIQ is an ML-powered supply chain intelligence platform. It forecasts product demand seven days ahead using a hybrid model — **Prophet** baselines per product-region pair, a global **XGBoost** residual-correction model, and **SHAP** explainability so every forecast shows *why* the model predicted what it did — and derives stockout alerts, supplier reliability, and regional growth analytics on top of a PostgreSQL + Redis + FastAPI + Next.js stack.
 
 ## Architecture
 
 ```text
-                    +---------------------------+
-                    |  Prefect Ingestion Flow   |
-                    |  02:00 UTC daily          |
-                    +------------+--------------+
-                                 |
-         +-----------------------+------------------------+
-         |                                                |
- +-------v--------+                               +-------v--------+
- |  OpenWeather   |                               |  Resend Alerts |
- |  API           |                               |  Low-stock mail|
- +-------+--------+                               +-------+--------+
-         |                                                ^
-         v                                                |
-+--------+------------------------------------------------+--------+
-|                    PostgreSQL + Redis                            |
-|  products | regions | daily_sales | inventory_snapshots | cache  |
-+--------+------------------------------------------------+--------+
-         |                                                |
- +-------v--------+                               +-------v--------+
- |  FastAPI API   |                               |  ML Training   |
- |  localhost:8000|                               |  backend/ml    |
- +-------+--------+                               +----------------+
-         |
- +-------v--------+
- | Next.js App    |
- | localhost:3000 |
- +----------------+
+ +--------------------+        +---------------------------+
+ |  Seed + Ingestion  |        |  ML Training              |
+ |  pipeline/ infra/  +-------->  Prophet per scope        |
+ |  synthetic demand  |        |  XGBoost residuals + SHAP |
+ +---------+----------+        +-------------+-------------+
+           |                                 |
+           v                                 v
+ +---------+---------------------------------+-------------+
+ |                PostgreSQL + Redis                        |
+ |  products | regions | daily_sales | inventory_snapshots |
+ |  supplier_shipments | forecast_runs | cache             |
+ +---------------------------+------------------------------+
+                             |
+                   +---------v----------+
+                   |  FastAPI backend   |
+                   |  localhost:8000    |
+                   +---------+----------+
+                             |
+                   +---------v----------+
+                   |  Next.js frontend  |
+                   |  localhost:3000    |
+                   +--------------------+
 ```
 
 ## Quick Start
 
-1. Clone the repo.
-2. Copy the root env file: `cp .env.example .env`
-3. Fill in backend secrets in [backend/.env](/C:/Users/saiku/OneDrive/Desktop/Projects/SupplyIQ/backend/.env) and frontend secrets in [frontend/.env.local](/C:/Users/saiku/OneDrive/Desktop/Projects/SupplyIQ/frontend/.env.local)
-4. Start infrastructure and app containers: `docker-compose up --build`
-5. Seed historical data once: `docker-compose run backend python /app/infra/seed.py`
-6. Train the forecast model: `docker-compose run backend python /app/backend/ml/train.py`
-7. Open `http://localhost:3000`
+```bash
+docker compose up --build
+```
 
-API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+That is the whole setup. On first run the backend automatically:
 
-## Environment Variables
+1. Creates the schema (six tables).
+2. Seeds **two years** of synthetic history — 20 products across 4 categories, 5 regions, with realistic seasonality (electronics spike in Nov-Dec, food stays steady) plus supplier shipment records.
+3. Trains the forecast models (Prophet per product-region + global XGBoost residual model + SHAP explainer). Expect **2–5 minutes** on the first boot; subsequent starts skip all of this and come up in seconds.
 
-Frontend in [frontend/.env.local](/C:/Users/saiku/OneDrive/Desktop/Projects/SupplyIQ/frontend/.env.local):
+Then open [http://localhost:3000](http://localhost:3000). API docs live at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-- `CLERK_SECRET_KEY`
-- `NEXT_PUBLIC_API_URL`
+To disable the auto-bootstrap (e.g. after the first run), set `BACKEND_AUTO_BOOTSTRAP=false` in a root `.env` file (see `.env.example` — every variable has a working default).
 
-Backend in [backend/.env](/C:/Users/saiku/OneDrive/Desktop/Projects/SupplyIQ/backend/.env):
+## What to Look At
 
-- `DATABASE_URL`
-- `REDIS_URL`
-- `CLERK_SECRET_KEY`
-- `OPENWEATHERMAP_API_KEY`
-- `RESEND_API_KEY`
-- `PREFECT_API_KEY`
-- `ALERT_EMAIL_FROM`
+- **Dashboard** — network-wide inventory positions, 30-day sales trend, low-stock watchlist, and last pipeline run.
+- **Analytics** — product sales, inventory turnover, regional revenue growth, and shipment-truthful supplier reliability (on-time rate from `supplier_shipments`).
+- **Forecast Studio** — pick any product + region and generate a 7-day demand forecast with confidence bounds, stockout-risk detection against reorder points, and a SHAP panel showing the top feature contributions (weather, traffic, lags, rolling averages).
+- **Pipeline Monitor** — status of the most recent data ingestion run.
 
-## Pipeline Overview
+## Project Layout
 
-- `pipeline/flows/ingestion_flow.py` runs extract, transform, and load.
-- `pipeline/tasks/extract.py` simulates daily product-by-region demand with numpy noise, seasonal category curves, real OpenWeatherMap temperatures, and traffic scaling by execution hour.
-- `pipeline/tasks/transform.py` validates rows with Pydantic, rejects invalid sales, computes revenue, and flags below-reorder inventory positions.
-- `pipeline/tasks/load.py` upserts `daily_sales`, upserts `inventory_snapshots`, and invalidates analytics cache keys in Redis.
-- `pipeline/flows/alert_flow.py` sends rate-limited low-inventory emails through Resend.
+```text
+backend/    FastAPI app: routers, services, SQLAlchemy models, ML train/predict
+frontend/   Next.js 14 App Router UI (TypeScript, Tailwind, ECharts, SWR)
+pipeline/   Plain-Python ETL: simulate a day of demand -> validate -> upsert
+infra/      init.sql, seed script, Dockerfiles
+```
 
-## Seeding And Training
+## ML Model Details
 
-- [infra/seed.py](/C:/Users/saiku/OneDrive/Desktop/Projects/SupplyIQ/infra/seed.py) generates two years of realistic history for 20 products across 4 categories and 5 regions.
-- Electronics receive a Nov-Dec demand lift; food stays comparatively steady year-round.
-- The seed script is idempotent through `ON CONFLICT DO UPDATE`, so reruns refresh the same historical windows instead of duplicating rows.
-- `backend/ml/train.py` trains Prophet per product-region scope and XGBoost residual corrections from `daily_sales`.
+- One Prophet model per `(product_id, region_id)` pair, trained on the full 2-year history; artifacts in `backend/ml/artifacts/`.
+- One global XGBoost model trained on Prophet residuals with engineered features (`weather_temp`, `traffic_index`, day-of-week, weekend flag, month, 7-day rolling average, lag-1, lag-7).
+- SHAP TreeExplainer surfaces per-forecast feature contributions, persisted as `shap_json` alongside each `forecast_runs` row.
+- Models are loaded from disk at request time — never retrained per request. Missing per-scope models return HTTP 404 with a clear message.
 
-## Deployment Guide
+## Running Pieces Manually
 
-### Vercel Frontend
+```bash
+# Re-seed (idempotent upserts)
+docker compose exec backend python /app/infra/seed.py
 
-1. Create a new Vercel project and point it at the `frontend/` app.
-2. Set `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, and `NEXT_PUBLIC_API_URL`.
-3. Set the build command to `npm run build` and the output to Next.js defaults.
-4. Deploy and verify the app can reach the Railway backend URL.
+# Re-train models
+docker compose exec backend python /app/backend/ml/train.py
 
-### Railway Backend
+# Simulate one more day of demand data
+docker compose exec backend python -m pipeline.flows.ingestion_flow
 
-1. Create a Railway project for the backend service and PostgreSQL/Redis.
-2. Deploy the repo with [infra/Dockerfile.backend](/C:/Users/saiku/OneDrive/Desktop/Projects/SupplyIQ/infra/Dockerfile.backend).
-3. Configure `DATABASE_URL`, `REDIS_URL`, `OPENWEATHERMAP_API_KEY`, `RESEND_API_KEY`, `PREFECT_API_KEY`, and `ALERT_EMAIL_FROM`.
-4. Run `python /app/infra/seed.py` once, then `python /app/backend/ml/train.py`.
-5. Point Vercel `NEXT_PUBLIC_API_URL` to the Railway FastAPI base URL.
+# Run the backend test suite
+docker compose exec backend python -m unittest discover -s /app/backend/tests -t /app
+```
+
+## Local Development Without Docker
+
+Backend: `pip install -r backend/requirements.txt`, set `BACKEND_DATABASE_URL` / `BACKEND_REDIS_URL` (see `backend/.env.example`), then `uvicorn main:app --reload` from `backend/` with `PYTHONPATH` pointing at the repo root.
+
+Frontend: `cd frontend && npm install && npm run dev` with `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1` in `frontend/.env.local`.
