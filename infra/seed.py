@@ -53,6 +53,54 @@ def _seasonal_demand_delta(category: str, month: int) -> float:
     return 4.0
 
 
+SUPPLIERS_BY_CATEGORY = {
+    "electronics": ["TechSupply Co", "Global Components Ltd", "Pacific Circuits"],
+    "apparel": ["Loom & Thread Mills", "Meridian Textiles", "Coastal Garments"],
+    "food": ["Harvest Direct", "FreshLine Distribution", "Granary Foods"],
+    "household": ["HomeBase Wholesale", "Clearwater Goods", "Summit Supplies"],
+}
+DEFAULT_SUPPLIERS = ["Northwind Trading", "Atlas Freight", "Beacon Logistics"]
+
+
+def build_shipment_rows(
+    products: list[dict[str, object]],
+    *,
+    end_date: date,
+    days: int,
+    rng: random.Random,
+) -> list[dict[str, object]]:
+    """Builds roughly monthly supplier shipments per product across the seed window."""
+
+    rows: list[dict[str, object]] = []
+    start_date = end_date - timedelta(days=days - 1)
+    for product in products:
+        suppliers = SUPPLIERS_BY_CATEGORY.get(str(product["category"]), DEFAULT_SUPPLIERS)
+        expected = start_date + timedelta(days=rng.randint(0, 14))
+        cycle = 0
+        while expected <= end_date + timedelta(days=14):
+            supplier_name = suppliers[cycle % len(suppliers)]
+            delay_days = rng.choice([-2, -1, 0, 0, 0, 1, 2, 3, 5, 7])
+            if expected > end_date:
+                status, actual_date = "in_transit", None
+            elif delay_days > 0:
+                status, actual_date = "delayed", expected + timedelta(days=delay_days)
+            else:
+                status, actual_date = "delivered", expected + timedelta(days=delay_days)
+            rows.append(
+                {
+                    "sku": product["sku"],
+                    "supplier_name": supplier_name,
+                    "expected_date": expected,
+                    "actual_date": actual_date,
+                    "quantity": int(float(product["reorder_point"]) * rng.uniform(1.2, 2.5)),
+                    "status": status,
+                }
+            )
+            expected += timedelta(days=rng.randint(26, 34))
+            cycle += 1
+    return rows
+
+
 def build_seed_dataset(*, end_date: date, days: int = 730) -> dict[str, list[dict[str, object]]]:
     """Builds the full historical dataset used for model training."""
 
@@ -125,6 +173,12 @@ def build_seed_dataset(*, end_date: date, days: int = 730) -> dict[str, list[dic
         "regions": regions,
         "daily_sales": daily_sales,
         "inventory_snapshots": inventory_snapshots,
+        "supplier_shipments": build_shipment_rows(
+            products,
+            end_date=end_date,
+            days=days,
+            rng=random.Random(42),
+        ),
     }
 
 
@@ -192,6 +246,7 @@ def seed_database(*, end_date: date | None = None, days: int = 730) -> dict[str,
         "regions": len(dataset["regions"]),
         "daily_sales": len(dataset["daily_sales"]),
         "inventory_snapshots": len(dataset["inventory_snapshots"]),
+        "supplier_shipments": len(dataset["supplier_shipments"]),
     }
 
     with psycopg.connect(_resolve_database_url()) as connection:
@@ -240,6 +295,29 @@ def seed_database(*, end_date: date | None = None, days: int = 730) -> dict[str,
                     for row in dataset["inventory_snapshots"]
                 ],
             )
+
+            cursor.executemany(
+                """
+                INSERT INTO supplier_shipments (product_id, supplier_name, expected_date, actual_date, quantity, status)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (product_id, supplier_name, expected_date)
+                DO UPDATE SET
+                    actual_date = EXCLUDED.actual_date,
+                    quantity = EXCLUDED.quantity,
+                    status = EXCLUDED.status
+                """,
+                [
+                    (
+                        product_ids[str(row["sku"])],
+                        row["supplier_name"],
+                        row["expected_date"],
+                        row["actual_date"],
+                        row["quantity"],
+                        row["status"],
+                    )
+                    for row in dataset["supplier_shipments"]
+                ],
+            )
         connection.commit()
 
     return counts
@@ -248,4 +326,11 @@ def seed_database(*, end_date: date | None = None, days: int = 730) -> dict[str,
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     result = seed_database()
-    logger.info("Seeded %s products, %s regions, %s daily_sales rows, and %s inventory_snapshots rows.", result["products"], result["regions"], result["daily_sales"], result["inventory_snapshots"])
+    logger.info(
+        "Seeded %s products, %s regions, %s daily_sales rows, %s inventory_snapshots rows, and %s supplier_shipments rows.",
+        result["products"],
+        result["regions"],
+        result["daily_sales"],
+        result["inventory_snapshots"],
+        result["supplier_shipments"],
+    )

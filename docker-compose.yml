@@ -1,8 +1,10 @@
 services:
   postgres:
-    image: postgres:15-alpine
-    env_file:
-      - ./.env
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-supplyiq}
+      POSTGRES_USER: ${POSTGRES_USER:-supplyiq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supplyiq_local_password}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -24,8 +26,11 @@ services:
     build:
       context: .
       dockerfile: infra/Dockerfile.backend
-    env_file:
-      - ./backend/.env
+    environment:
+      BACKEND_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-supplyiq}:${POSTGRES_PASSWORD:-supplyiq_local_password}@postgres:5432/${POSTGRES_DB:-supplyiq}
+      BACKEND_REDIS_URL: redis://redis:6379/0
+      BACKEND_CORS_ORIGINS: http://localhost:3000
+      BACKEND_AUTO_BOOTSTRAP: ${BACKEND_AUTO_BOOTSTRAP:-true}
     volumes:
       - ./backend:/app/backend
       - ./pipeline:/app/pipeline
@@ -33,7 +38,13 @@ services:
       - model_artifacts:/app/backend/ml/artifacts
     ports:
       - "${BACKEND_PORT:-8000}:8000"
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 600s
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,10 +55,10 @@ services:
     build:
       context: .
       dockerfile: infra/Dockerfile.frontend
-    env_file:
-      - ./frontend/.env.local
     environment:
       NODE_ENV: ${NODE_ENV:-development}
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:${BACKEND_PORT:-8000}/api/v1
+      INTERNAL_API_BASE_URL: http://backend:8000/api/v1
     volumes:
       - ./frontend:/app/frontend
       - /app/frontend/node_modules
@@ -55,7 +66,7 @@ services:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres_data:

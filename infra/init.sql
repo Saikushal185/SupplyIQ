@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS supplier_shipments (
     expected_date DATE,
     actual_date DATE,
     quantity INTEGER,
-    status VARCHAR(20)
+    status VARCHAR(20),
+    UNIQUE (product_id, supplier_name, expected_date)
 );
 
 CREATE TABLE IF NOT EXISTS forecast_runs (
