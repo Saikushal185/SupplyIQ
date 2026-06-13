@@ -6,8 +6,6 @@ import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { Activity, BarChart3, BrainCircuit, ChevronLeft, ChevronRight, ShieldCheck, X } from "lucide-react";
 
-import { useSessionContext } from "@/context/session-context";
-
 interface SidebarProps {
   collapsed: boolean;
   mobileOpen: boolean;
@@ -19,19 +17,16 @@ interface NavItem {
   href: Route;
   label: string;
   icon: typeof Activity;
-  visible: (canViewForecast: boolean) => boolean;
 }
 
 const navItems: NavItem[] = [
-  { href: "/dashboard" as Route, label: "Dashboard", icon: Activity, visible: () => true },
-  { href: "/analytics" as Route, label: "Analytics", icon: BarChart3, visible: () => true },
-  { href: "/forecast" as Route, label: "Forecast", icon: BrainCircuit, visible: (canViewForecast) => canViewForecast },
+  { href: "/dashboard" as Route, label: "Dashboard", icon: Activity },
+  { href: "/analytics" as Route, label: "Analytics", icon: BarChart3 },
+  { href: "/forecast" as Route, label: "Forecast", icon: BrainCircuit },
 ];
 
 export function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onCloseMobile }: SidebarProps) {
   const pathname = usePathname();
-  const session = useSessionContext();
-  const visibleItems = navItems.filter((item) => item.visible(session.canViewForecast));
 
   return (
     <>
@@ -90,7 +85,7 @@ export function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onCloseMobile
         </div>
 
         <nav className="mt-6 flex-1 space-y-2">
-          {visibleItems.map((item) => {
+          {navItems.map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href;
 
@@ -113,28 +108,26 @@ export function Sidebar({ collapsed, mobileOpen, onToggleCollapse, onCloseMobile
             );
           })}
 
-          {session.canViewPipeline ? (
-            <Link
-              href={"/pipeline" as Route}
-              className={clsx(
-                "flex items-center gap-3 rounded-2xl border px-3 py-3 text-sm font-medium transition",
-                pathname === "/pipeline"
-                  ? "border-cyan-400/30 bg-cyan-400/15 text-white"
-                  : "border-transparent text-slate-300 hover:border-white/10 hover:bg-white/5 hover:text-white",
-                collapsed && "lg:justify-center",
-              )}
-              onClick={onCloseMobile}
-            >
-              <ShieldCheck className="h-5 w-5 shrink-0" />
-              <span className={clsx(collapsed && "lg:hidden")}>Pipeline</span>
-            </Link>
-          ) : null}
+          <Link
+            href={"/pipeline" as Route}
+            className={clsx(
+              "flex items-center gap-3 rounded-2xl border px-3 py-3 text-sm font-medium transition",
+              pathname === "/pipeline"
+                ? "border-cyan-400/30 bg-cyan-400/15 text-white"
+                : "border-transparent text-slate-300 hover:border-white/10 hover:bg-white/5 hover:text-white",
+              collapsed && "lg:justify-center",
+            )}
+            onClick={onCloseMobile}
+          >
+            <ShieldCheck className="h-5 w-5 shrink-0" />
+            <span className={clsx(collapsed && "lg:hidden")}>Pipeline</span>
+          </Link>
         </nav>
 
         <div className={clsx("rounded-[24px] border border-cyan-400/15 bg-cyan-400/10 p-4", collapsed && "lg:px-2 lg:text-center")}>
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cyan-100">Secure Workspace</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cyan-100">Forecast Engine</p>
           <p className={clsx("mt-2 text-sm text-slate-300", collapsed && "lg:hidden")}>
-            Clerk-backed access and role-aware forecast permissions are active throughout the shell.
+            Prophet baselines, XGBoost residual corrections, and SHAP explainability power every forecast.
           </p>
         </div>
       </aside>

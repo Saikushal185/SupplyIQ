@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { BellRing, Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { usePathname } from "next/navigation";
 
@@ -18,7 +17,6 @@ const pageTitles: Record<string, string> = {
   "/analytics": "Analytics Command Center",
   "/forecast": "Forecast Studio",
   "/pipeline": "Pipeline Monitor",
-  "/login": "Secure Sign In",
 };
 
 function getInitials(name: string) {
@@ -77,15 +75,6 @@ export function Topbar({ isSidebarCollapsed, onToggleDesktopSidebar, onToggleMob
           </div>
           <StatusBadge label={session.roleLabel} variant="indigo" className="hidden sm:inline-flex" />
         </div>
-
-        {!session.isSignedIn ? (
-          <Link
-            href="/login"
-            className="inline-flex items-center rounded-full border border-indigo-400/25 bg-indigo-400/10 px-4 py-2 text-sm font-medium text-indigo-100 transition hover:bg-indigo-400/15"
-          >
-            Sign in
-          </Link>
-        ) : null}
       </div>
     </header>
   );

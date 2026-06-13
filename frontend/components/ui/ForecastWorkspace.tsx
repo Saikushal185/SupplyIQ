@@ -8,7 +8,6 @@ import { EChart } from "@/components/charts/EChart";
 import { SectionCard } from "@/components/ui/SectionCard";
 import { SkeletonBlock } from "@/components/ui/Skeleton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { useSessionContext } from "@/context/session-context";
 import { generateForecast } from "@/lib/api";
 import {
   buildForecastBand,
@@ -50,7 +49,6 @@ function EmptyResultState() {
 }
 
 export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
-  const session = useSessionContext();
   const productMap = useMemo(() => {
     const map = new Map<string, { productId: string; productName: string; sku: string; regions: InventoryPositionItem[] }>();
     positions.forEach((position) => {
@@ -195,22 +193,13 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
       return;
     }
 
-    if (!session.canGenerateForecast) {
-      setSubmissionError("Viewer roles can review forecasts but cannot generate them.");
-      return;
-    }
-
     setIsSubmitting(true);
     setSubmissionError(null);
     try {
-      const token = await session.getToken();
-      const response = await generateForecast(
-        {
-          product_id: selectedPosition.product_id,
-          region_id: selectedPosition.region_id,
-        },
-        token,
-      );
+      const response = await generateForecast({
+        product_id: selectedPosition.product_id,
+        region_id: selectedPosition.region_id,
+      });
       await latestForecast.mutate(response, { revalidate: false });
     } catch (error) {
       setSubmissionError(error instanceof Error ? error.message : "Unable to generate a forecast right now.");
@@ -288,7 +277,7 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
             type="button"
             className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-300"
             onClick={handleGenerate}
-            disabled={!session.canGenerateForecast || isSubmitting || !selectedPosition}
+            disabled={isSubmitting || !selectedPosition}
           >
             {isSubmitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
             {isSubmitting ? "Generating forecast..." : "Generate 7-Day Forecast"}
@@ -298,12 +287,6 @@ export function ForecastWorkspace({ positions }: ForecastWorkspaceProps) {
             <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Last forecast run</p>
             <p className="mono-data mt-2 text-sm text-white">{formatDateTime(latestForecastData?.run_at ?? null)}</p>
           </div>
-
-          {!session.canGenerateForecast ? (
-            <div className="rounded-[24px] border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
-              Viewer role detected. You can review the latest saved forecast, but generation is disabled.
-            </div>
-          ) : null}
 
           {submissionError ? <p className="text-sm text-rose-300">{submissionError}</p> : null}
         </div>

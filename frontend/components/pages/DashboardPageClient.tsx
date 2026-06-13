@@ -10,7 +10,6 @@ import { SectionCard } from "@/components/ui/SectionCard";
 import { SkeletonBlock } from "@/components/ui/Skeleton";
 import { StatCard } from "@/components/ui/StatCard";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { useSessionContext } from "@/context/session-context";
 import {
   buildSalesTrend,
   buildTopProducts,
@@ -85,7 +84,6 @@ function ErrorState({ message }: { message: string }) {
 }
 
 export function DashboardPageClient() {
-  const session = useSessionContext();
   const trendRange = useMemo(() => getRelativeDateRange(30), []);
   const monthStart = useMemo(() => getMonthStartIsoDate(), []);
   const today = useMemo(() => getTodayIsoDate(), []);
@@ -95,7 +93,7 @@ export function DashboardPageClient() {
   const sales = useSalesAnalytics(trendRange.startDate, trendRange.endDate);
   const productSales = useProductSales(monthStart, today);
   const forecastRunCount = useForecastRunCount(today);
-  const pipelineStatus = usePipelineStatus(session.canViewPipeline);
+  const pipelineStatus = usePipelineStatus();
   const inventorySummaryData = inventorySummary.data;
   const lowStockData = lowStock.data;
   const salesData = sales.data;
@@ -114,7 +112,6 @@ export function DashboardPageClient() {
     hasSales: Boolean(salesData),
     hasProductSales: Boolean(productSalesData),
     hasForecastRunCount: Boolean(forecastRunCountData),
-    canViewPipeline: session.canViewPipeline,
     hasPipelineStatus: Boolean(pipelineStatusData),
     hasPipelineStatusError: Boolean(pipelineStatus.error),
   });
@@ -261,7 +258,7 @@ export function DashboardPageClient() {
         </SectionCard>
       </section>
 
-      <section className={`grid gap-6 ${session.canViewPipeline ? "xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]" : "grid-cols-1"}`}>
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
         <SectionCard
           title="Low Stock Products"
           subtitle="Priority replenishment watchlist with current quantity, reorder points, and risk status."
@@ -312,8 +309,7 @@ export function DashboardPageClient() {
           />
         </SectionCard>
 
-        {session.canViewPipeline ? (
-          <SectionCard
+        <SectionCard
             title="Pipeline Status"
             subtitle="Latest operational run health, refresh cadence, and next scheduled execution."
           >
@@ -356,7 +352,6 @@ export function DashboardPageClient() {
               </div>
             )}
           </SectionCard>
-        ) : null}
       </section>
     </div>
   );
