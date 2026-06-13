@@ -13,7 +13,7 @@ from pydantic_settings.sources import DotEnvSettingsSource, EnvSettingsSource
 BACKEND_DIR = Path(__file__).resolve().parent
 
 
-class SupplyIQEnvSettingsSource(EnvSettingsSource):
+class _RawCorsOriginsMixin:
     """Preserves raw CORS origin values for custom parsing."""
 
     def prepare_field_value(
@@ -27,24 +27,15 @@ class SupplyIQEnvSettingsSource(EnvSettingsSource):
 
         if field_name == "cors_origins" and isinstance(value, str):
             return value
-        return super().prepare_field_value(field_name, field, value, value_is_complex)
+        return super().prepare_field_value(field_name, field, value, value_is_complex)  # type: ignore[misc]
 
 
-class SupplyIQDotEnvSettingsSource(DotEnvSettingsSource):
-    """Preserves raw dotenv CORS origin values for custom parsing."""
+class SupplyIQEnvSettingsSource(_RawCorsOriginsMixin, EnvSettingsSource):
+    pass
 
-    def prepare_field_value(
-        self,
-        field_name: str,
-        field: FieldInfo,
-        value: Any,
-        value_is_complex: bool,
-    ) -> Any:
-        """Skips automatic JSON parsing for CORS origins."""
 
-        if field_name == "cors_origins" and isinstance(value, str):
-            return value
-        return super().prepare_field_value(field_name, field, value, value_is_complex)
+class SupplyIQDotEnvSettingsSource(_RawCorsOriginsMixin, DotEnvSettingsSource):
+    pass
 
 
 class Settings(BaseSettings):
@@ -60,45 +51,13 @@ class Settings(BaseSettings):
         default="redis://localhost:6379/0",
         validation_alias=AliasChoices("BACKEND_REDIS_URL", "REDIS_URL"),
     )
-    model_artifact_path: Path = BACKEND_DIR / "ml" / "artifacts" / "forecast_model.joblib"
     cache_ttl_seconds: int = 300
-    clerk_jwks_cache_ttl_seconds: int = 300
+    request_timeout_seconds: int = 30
+    max_page_size: int = 200
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
-    auth_enabled: bool = False
-    clerk_jwks_url: str | None = None
-    clerk_issuer: str | None = None
-    clerk_audience: str | None = None
-    prefect_api_url: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("BACKEND_PREFECT_API_URL", "PREFECT_API_URL"),
-    )
-    prefect_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("BACKEND_PREFECT_API_KEY", "PREFECT_API_KEY"),
-    )
-    prefect_flow_name: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("BACKEND_PREFECT_FLOW_NAME", "PREFECT_FLOW_NAME"),
-    )
-    clerk_secret_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("BACKEND_CLERK_SECRET_KEY", "CLERK_SECRET_KEY"),
-    )
-    openweathermap_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("BACKEND_OPENWEATHERMAP_API_KEY", "OPENWEATHERMAP_API_KEY"),
-    )
-    resend_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("BACKEND_RESEND_API_KEY", "RESEND_API_KEY"),
-    )
-    alert_email_from: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("BACKEND_ALERT_EMAIL_FROM", "ALERT_EMAIL_FROM"),
-    )
-    alert_email_to: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("BACKEND_ALERT_EMAIL_TO", "ALERT_EMAIL_TO"),
+    auto_bootstrap: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("BACKEND_AUTO_BOOTSTRAP", "AUTO_BOOTSTRAP"),
     )
 
     model_config = SettingsConfigDict(
