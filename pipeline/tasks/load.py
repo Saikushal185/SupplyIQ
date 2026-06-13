@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 try:
@@ -15,16 +18,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - dependency exists in the runtime image
     Redis = None  # type: ignore[assignment]
 
-try:
-    from prefect import task
-except ModuleNotFoundError:  # pragma: no cover - lightweight fallback for local unit imports
-    def task(*_args, **_kwargs):
-        def decorator(func):
-            func.fn = func
-            return func
-        return decorator
-
 from pipeline.tasks.database import build_postgres_dsn, get_pipeline_database_url
+
+LAST_RUN_KEY = "supplyiq:pipeline:last_run"
 
 
 def build_inventory_rows_for_load(rows: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -155,12 +151,30 @@ def _upsert_inventory_snapshot(cursor: Any, payload: dict[str, object]) -> None:
     )
 
 
-@task(name="load_supply_data")
+def record_last_run(redis_client: Any, counts: dict[str, int], *, started_at: str, completed_at: str) -> None:
+    """Stores the latest ingestion run summary for the backend status endpoint."""
+
+    redis_client.setex(
+        LAST_RUN_KEY,
+        86400,
+        json.dumps(
+            {
+                "run_id": str(uuid.uuid4()),
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "counts": counts,
+            }
+        ),
+    )
+
+
 def load_supply_data(transformed_data: dict[str, list[dict[str, object]]]) -> dict[str, int]:
     """Loads validated supply data into PostgreSQL and clears analytics caches."""
 
     if psycopg is None:  # pragma: no cover - exercised only when dependency is absent
         raise RuntimeError("psycopg must be installed to run pipeline database loads.")
+
+    started_at = datetime.now(UTC).isoformat()
 
     counts = {
         "regions": 0,
@@ -224,6 +238,12 @@ def load_supply_data(transformed_data: dict[str, list[dict[str, object]]]) -> di
         redis_client = Redis.from_url(redis_url, decode_responses=True)
         try:
             counts["invalidated_cache_keys"] = invalidate_analytics_cache(redis_client)
+            record_last_run(
+                redis_client,
+                counts,
+                started_at=started_at,
+                completed_at=datetime.now(UTC).isoformat(),
+            )
         finally:
             redis_client.close()
 

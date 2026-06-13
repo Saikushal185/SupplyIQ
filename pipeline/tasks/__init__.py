@@ -1,1 +1,1 @@
-"""Prefect tasks for SupplyIQ."""
+"""Ingestion pipeline tasks for SupplyIQ."""

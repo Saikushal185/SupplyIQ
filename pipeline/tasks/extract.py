@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import os
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
-
-try:
-    import httpx
-except ModuleNotFoundError:  # pragma: no cover - dependency exists in the runtime image
-    httpx = None  # type: ignore[assignment]
 
 try:
     import numpy as np
@@ -21,17 +15,8 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - dependency exists in the runtime image
     psycopg = None  # type: ignore[assignment]
 
-try:
-    from prefect import task
-except ModuleNotFoundError:  # pragma: no cover - lightweight fallback for local unit imports
-    def task(*_args, **_kwargs):
-        def decorator(func):
-            func.fn = func
-            return func
-        return decorator
-
 from pipeline.tasks.database import build_postgres_dsn, get_pipeline_database_url
-from pipeline.tasks.reference_data import DEFAULT_PRODUCTS, DEFAULT_REGIONS, REGION_CITY_BY_NAME
+from pipeline.tasks.reference_data import DEFAULT_PRODUCTS, DEFAULT_REGIONS
 
 
 def seasonal_multiplier(category: str, month: int) -> float:
@@ -106,36 +91,14 @@ def _weather_fallback(region: dict[str, object], run_at: datetime) -> float:
 def fetch_weather_by_region(
     regions: list[dict[str, object]],
     *,
-    api_key: str | None,
     run_at: datetime,
 ) -> dict[str, float]:
-    """Fetches live temperatures from OpenWeatherMap, falling back to seasonal baselines."""
+    """Returns deterministic seasonal temperatures for every region."""
 
-    if httpx is None or not api_key:
-        return {
-            str(region["region_id"]): _weather_fallback(region, run_at)
-            for region in regions
-        }
-
-    weather_by_region: dict[str, float] = {}
-    with httpx.Client(timeout=10.0) as client:
-        for region in regions:
-            city = str(region.get("city") or REGION_CITY_BY_NAME.get(str(region.get("name")), region.get("name", "")))
-            try:
-                response = client.get(
-                    "https://api.openweathermap.org/data/2.5/weather",
-                    params={
-                        "q": city,
-                        "appid": api_key,
-                        "units": "metric",
-                    },
-                )
-                response.raise_for_status()
-                payload = response.json()
-                weather_by_region[str(region["region_id"])] = round(float(payload["main"]["temp"]), 2)
-            except Exception:  # pragma: no cover - exercised in live integration only
-                weather_by_region[str(region["region_id"])] = _weather_fallback(region, run_at)
-    return weather_by_region
+    return {
+        str(region["region_id"]): _weather_fallback(region, run_at)
+        for region in regions
+    }
 
 
 def build_live_daily_sales_rows(
@@ -230,7 +193,6 @@ def _load_reference_data_from_database(run_at: datetime) -> tuple[list[dict[str,
                         "name": name,
                         "country": country,
                         "timezone": timezone_name,
-                        "city": REGION_CITY_BY_NAME.get(str(name), str(name)),
                     }
                 )
 
@@ -313,7 +275,6 @@ def _build_inventory_snapshots(
     return rows
 
 
-@task(name="extract_seed_supply_data")
 def extract_seed_supply_data() -> dict[str, list[dict[str, object]]]:
     """Extracts the daily simulated sales inputs for the ingestion pipeline."""
 
@@ -323,11 +284,7 @@ def extract_seed_supply_data() -> dict[str, list[dict[str, object]]]:
     except Exception:
         products, regions, opening_inventory = _build_bootstrap_reference_data()
 
-    weather_by_region = fetch_weather_by_region(
-        regions,
-        api_key=os.getenv("OPENWEATHERMAP_API_KEY") or os.getenv("BACKEND_OPENWEATHERMAP_API_KEY"),
-        run_at=run_at,
-    )
+    weather_by_region = fetch_weather_by_region(regions, run_at=run_at)
     daily_sales = build_live_daily_sales_rows(
         products=products,
         regions=regions,

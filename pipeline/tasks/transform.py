@@ -20,16 +20,6 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only in lightweight 
             return func
         return decorator
 
-try:
-    from prefect import task
-except ModuleNotFoundError:  # pragma: no cover - lightweight fallback for local unit imports
-    def task(*_args, **_kwargs):
-        def decorator(func):
-            func.fn = func
-            return func
-        return decorator
-
-
 class ExtractedSaleRow(BaseModel):
     """Validates extracted daily sales before loading."""
 
@@ -110,7 +100,6 @@ class ExtractedInventoryRow(BaseModel):
         return instance
 
 
-@task(name="transform_supply_data")
 def transform_supply_data(raw_data: dict[str, list[dict[str, object]]]) -> dict[str, list[dict[str, object]]]:
     """Validates, enriches, and flags the extracted supply data."""
 

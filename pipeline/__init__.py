@@ -1,1 +1,1 @@
-"""SupplyIQ Prefect pipeline package."""
+"""SupplyIQ data ingestion pipeline package."""

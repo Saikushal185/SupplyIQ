@@ -4,15 +4,6 @@ from __future__ import annotations
 
 from typing import Callable
 
-try:
-    from prefect import flow
-except ModuleNotFoundError:  # pragma: no cover - lightweight fallback for local unit imports
-    def flow(*_args, **_kwargs):
-        def decorator(func):
-            func.fn = func
-            return func
-        return decorator
-
 from pipeline.tasks.extract import extract_seed_supply_data
 from pipeline.tasks.load import load_supply_data
 from pipeline.tasks.transform import transform_supply_data
@@ -30,7 +21,6 @@ def execute_ingestion_pipeline(
     return load_step(transformed_data)
 
 
-@flow(name="supplyiq-ingestion-flow")
 def run_ingestion_flow() -> dict[str, int]:
     """Runs the end-to-end seed ingestion pipeline."""
 
@@ -41,15 +31,5 @@ def run_ingestion_flow() -> dict[str, int]:
     )
 
 
-def run_ingestion_cli() -> dict[str, int]:
-    """Runs ingestion without starting the Prefect orchestration engine."""
-
-    return execute_ingestion_pipeline(
-        extract_seed_supply_data.fn,
-        transform_supply_data.fn,
-        load_supply_data.fn,
-    )
-
-
 if __name__ == "__main__":
-    run_ingestion_cli()
+    run_ingestion_flow()

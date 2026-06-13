@@ -1,1 +1,1 @@
-"""Prefect flows for SupplyIQ."""
+"""Ingestion pipeline flows for SupplyIQ."""
