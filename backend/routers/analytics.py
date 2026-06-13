@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.dependencies import get_cache_service, get_db
 from backend.services import db_service
-from backend.services.analytics_service import get_analytics_filter_options, get_regional_growth
+from backend.services.analytics_service import get_analytics_filter_options, get_regional_growth, get_top_products
 from backend.services.cache_service import CacheService
 from backend.services.response_service import build_response
 
@@ -170,6 +170,22 @@ async def get_regional_growth_route(
         namespace="analytics.regional-growth",
         payload={},
         loader=lambda: get_regional_growth(session),
+    )
+
+
+@router.get("/top-products")
+async def get_top_products_route(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    cache_service: Annotated[CacheService, Depends(get_cache_service)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+):
+    """Returns the top revenue-generating products across all regions."""
+
+    return await _load_cached_analytics_payload(
+        cache_service=cache_service,
+        namespace="analytics.top-products",
+        payload={"limit": limit},
+        loader=lambda: get_top_products(session, limit=limit),
     )
 
 
