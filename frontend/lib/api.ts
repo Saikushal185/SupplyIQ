@@ -4,7 +4,6 @@ import type {
   ForecastGenerateRequest,
   ForecastRecordResponse,
   ForecastRunCount,
-  InventoryHistoryItem,
   InventoryPositionItem,
   InventoryTurnoverItem,
   PipelineStatus,
@@ -16,7 +15,6 @@ import type {
 
 const API_BASE_URL =
   process.env.INTERNAL_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   "http://localhost:8000/api/v1";
 
@@ -47,16 +45,11 @@ async function readErrorMessage(response: Response): Promise<string> {
 }
 
 /** Sends a typed HTTP request to the backend API. */
-async function request<T>(
-  path: string,
-  init?: RequestInit,
-  token?: string | null,
-): Promise<ApiEnvelope<T>> {
+async function request<T>(path: string, init?: RequestInit): Promise<ApiEnvelope<T>> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
@@ -69,16 +62,11 @@ async function request<T>(
   return (await response.json()) as ApiEnvelope<T>;
 }
 
-async function requestAllow404<T>(
-  path: string,
-  init?: RequestInit,
-  token?: string | null,
-): Promise<ApiEnvelope<T> | null> {
+async function requestAllow404<T>(path: string, init?: RequestInit): Promise<ApiEnvelope<T> | null> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
@@ -95,41 +83,29 @@ async function requestAllow404<T>(
   return (await response.json()) as ApiEnvelope<T>;
 }
 
-export function fetchInventorySummary(regionId?: string, token?: string | null) {
-  return request<InventoryPositionItem[]>(`/inventory/summary${buildQuery({ region_id: regionId })}`, undefined, token);
+export function fetchInventorySummary(regionId?: string) {
+  return request<InventoryPositionItem[]>(`/inventory/summary${buildQuery({ region_id: regionId })}`);
 }
 
-export function fetchLowStock(regionId?: string, token?: string | null) {
-  return request<InventoryPositionItem[]>(`/inventory/low-stock${buildQuery({ region_id: regionId })}`, undefined, token);
+export function fetchLowStock(regionId?: string) {
+  return request<InventoryPositionItem[]>(`/inventory/low-stock${buildQuery({ region_id: regionId })}`);
 }
 
-export function fetchInventoryHistory(productId: string, token?: string | null) {
-  return request<InventoryHistoryItem[]>(`/inventory/${productId}/history`, undefined, token);
-}
-
-export function fetchSalesAnalytics(startDate?: string, endDate?: string, regionId?: string, token?: string | null) {
+export function fetchSalesAnalytics(startDate?: string, endDate?: string, regionId?: string) {
   return request<SalesAnalyticsItem[]>(
     `/analytics/sales${buildQuery({
       start_date: startDate,
       end_date: endDate,
       region_id: regionId,
     })}`,
-    undefined,
-    token,
   );
 }
 
-export function fetchAnalyticsFilters(token?: string | null) {
-  return request<AnalyticsFilterOptions>("/analytics/filters", undefined, token);
+export function fetchAnalyticsFilters() {
+  return request<AnalyticsFilterOptions>("/analytics/filters");
 }
 
-export function fetchProductSales(
-  startDate?: string,
-  endDate?: string,
-  regionId?: string,
-  category?: string,
-  token?: string | null,
-) {
+export function fetchProductSales(startDate?: string, endDate?: string, regionId?: string, category?: string) {
   return request<ProductSalesSummaryItem[]>(
     `/analytics/product-sales${buildQuery({
       start_date: startDate,
@@ -137,57 +113,45 @@ export function fetchProductSales(
       region_id: regionId,
       category,
     })}`,
-    undefined,
-    token,
   );
 }
 
-export function fetchForecastRunCount(runDate?: string, token?: string | null) {
-  return request<ForecastRunCount>(`/analytics/forecast-runs${buildQuery({ run_date: runDate })}`, undefined, token);
+export function fetchForecastRunCount(runDate?: string) {
+  return request<ForecastRunCount>(`/analytics/forecast-runs${buildQuery({ run_date: runDate })}`);
 }
 
-export function fetchInventoryTurnover(startDate?: string, endDate?: string, token?: string | null) {
+export function fetchInventoryTurnover(startDate?: string, endDate?: string) {
   return request<InventoryTurnoverItem[]>(
     `/analytics/turnover${buildQuery({
       start_date: startDate,
       end_date: endDate,
     })}`,
-    undefined,
-    token,
   );
 }
 
-export function fetchSupplierReliability(regionId?: string, token?: string | null) {
-  return request<SupplierPerformanceItem[]>(
-    `/analytics/supplier-reliability${buildQuery({ region_id: regionId })}`,
-    undefined,
-    token,
-  );
+export function fetchSupplierReliability(regionId?: string) {
+  return request<SupplierPerformanceItem[]>(`/analytics/supplier-reliability${buildQuery({ region_id: regionId })}`);
 }
 
-export function fetchRegionalGrowth(token?: string | null) {
-  return request<RegionalGrowthItem[]>("/analytics/regional-growth", undefined, token);
+export function fetchRegionalGrowth() {
+  return request<RegionalGrowthItem[]>("/analytics/regional-growth");
 }
 
-export function generateForecast(payload: ForecastGenerateRequest, token?: string | null) {
-  return request<ForecastRecordResponse>(
-    "/forecast/generate",
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-    },
-    token,
-  );
+export function generateForecast(payload: ForecastGenerateRequest) {
+  return request<ForecastRecordResponse>("/forecast/generate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
-export function fetchLatestForecast(productId: string, regionId: string, token?: string | null) {
-  return requestAllow404<ForecastRecordResponse>(`/forecast/latest/${productId}/${regionId}`, undefined, token);
+export function fetchLatestForecast(productId: string, regionId: string) {
+  return requestAllow404<ForecastRecordResponse>(`/forecast/latest/${productId}/${regionId}`);
 }
 
-export function fetchForecastHistory(productId: string, token?: string | null) {
-  return request<ForecastRecordResponse[]>(`/forecast/history/${productId}`, undefined, token);
+export function fetchForecastHistory(productId: string) {
+  return request<ForecastRecordResponse[]>(`/forecast/history/${productId}`);
 }
 
-export function fetchPipelineStatus(token?: string | null) {
-  return request<PipelineStatus>("/pipeline/status", undefined, token);
+export function fetchPipelineStatus() {
+  return request<PipelineStatus>("/pipeline/status");
 }

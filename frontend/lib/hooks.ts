@@ -2,7 +2,6 @@
 
 import useSWR from "swr";
 
-import { useSessionContext } from "@/context/session-context";
 import {
   fetchAnalyticsFilters,
   fetchForecastHistory,
@@ -35,77 +34,57 @@ import type {
 
 type SwrKey = ReadonlyArray<string | number | boolean | null | undefined>;
 
-/** Creates an SWR query tied to the current session token context. */
-function useAuthedQuery<T>(
-  key: SwrKey,
-  fetcher: (token: string | null) => Promise<ApiEnvelope<T>>,
-  enabled = true,
-) {
-  const session = useSessionContext();
-  const swrKey = session.isLoaded && enabled ? [...key, session.userId ?? "guest"] : null;
-
-  return useSWR<ApiEnvelope<T>>(swrKey, async () => fetcher(await session.getToken()));
+function useQuery<T>(key: SwrKey, fetcher: () => Promise<ApiEnvelope<T>>, enabled = true) {
+  return useSWR<ApiEnvelope<T>>(enabled ? key : null, fetcher);
 }
 
-function useOptionalAuthedQuery<T>(
-  key: SwrKey,
-  fetcher: (token: string | null) => Promise<ApiEnvelope<T> | null>,
-  enabled = true,
-) {
-  const session = useSessionContext();
-  const swrKey = session.isLoaded && enabled ? [...key, session.userId ?? "guest"] : null;
-
-  return useSWR<ApiEnvelope<T> | null>(swrKey, async () => fetcher(await session.getToken()));
+function useOptionalQuery<T>(key: SwrKey, fetcher: () => Promise<ApiEnvelope<T> | null>, enabled = true) {
+  return useSWR<ApiEnvelope<T> | null>(enabled ? key : null, fetcher);
 }
 
 export function useInventorySummary(regionId?: string) {
-  return useAuthedQuery<InventoryPositionItem[]>(["inventory-summary", regionId], (token) =>
-    fetchInventorySummary(regionId, token),
-  );
+  return useQuery<InventoryPositionItem[]>(["inventory-summary", regionId], () => fetchInventorySummary(regionId));
 }
 
 export function useLowStock(regionId?: string) {
-  return useAuthedQuery<InventoryPositionItem[]>(["low-stock", regionId], (token) => fetchLowStock(regionId, token));
+  return useQuery<InventoryPositionItem[]>(["low-stock", regionId], () => fetchLowStock(regionId));
 }
 
 export function useSalesAnalytics(startDate?: string, endDate?: string, regionId?: string) {
-  return useAuthedQuery<SalesAnalyticsItem[]>(["sales-analytics", startDate, endDate, regionId], (token) =>
-    fetchSalesAnalytics(startDate, endDate, regionId, token),
+  return useQuery<SalesAnalyticsItem[]>(["sales-analytics", startDate, endDate, regionId], () =>
+    fetchSalesAnalytics(startDate, endDate, regionId),
   );
 }
 
 export function useAnalyticsFilters() {
-  return useAuthedQuery<AnalyticsFilterOptions>(["analytics-filters"], (token) => fetchAnalyticsFilters(token));
+  return useQuery<AnalyticsFilterOptions>(["analytics-filters"], () => fetchAnalyticsFilters());
 }
 
 export function useProductSales(startDate?: string, endDate?: string, regionId?: string, category?: string) {
-  return useAuthedQuery<ProductSalesSummaryItem[]>(["product-sales", startDate, endDate, regionId, category], (token) =>
-    fetchProductSales(startDate, endDate, regionId, category, token),
+  return useQuery<ProductSalesSummaryItem[]>(["product-sales", startDate, endDate, regionId, category], () =>
+    fetchProductSales(startDate, endDate, regionId, category),
   );
 }
 
 export function useForecastRunCount(runDate?: string) {
-  return useAuthedQuery<ForecastRunCount>(["forecast-run-count", runDate], (token) => fetchForecastRunCount(runDate, token));
+  return useQuery<ForecastRunCount>(["forecast-run-count", runDate], () => fetchForecastRunCount(runDate));
 }
 
 export function useInventoryTurnover(startDate?: string, endDate?: string) {
-  return useAuthedQuery<InventoryTurnoverItem[]>(["inventory-turnover", startDate, endDate], (token) =>
-    fetchInventoryTurnover(startDate, endDate, token),
+  return useQuery<InventoryTurnoverItem[]>(["inventory-turnover", startDate, endDate], () =>
+    fetchInventoryTurnover(startDate, endDate),
   );
 }
 
 export function useInventoryTurnoverTrend(periods: InventoryTurnoverTrendPeriod[]) {
-  const session = useSessionContext();
-  const swrKey =
-    session.isLoaded && periods.length
-      ? ["inventory-turnover-trend", ...periods.flatMap((period) => [period.key, period.startDate, period.endDate]), session.userId ?? "guest"]
-      : null;
+  const swrKey = periods.length
+    ? ["inventory-turnover-trend", ...periods.flatMap((period) => [period.key, period.startDate, period.endDate])]
+    : null;
 
   return useSWR<ApiEnvelope<InventoryTurnoverTrendBucket[]>>(swrKey, async () => {
-    const token = await session.getToken();
     const buckets = await Promise.all(
       periods.map(async (period) => {
-        const response = await fetchInventoryTurnover(period.startDate, period.endDate, token);
+        const response = await fetchInventoryTurnover(period.startDate, period.endDate);
         return {
           ...period,
           rows: response.data,
@@ -124,35 +103,35 @@ export function useInventoryTurnoverTrend(periods: InventoryTurnoverTrendPeriod[
 }
 
 export function useSupplierReliability(regionId?: string) {
-  return useAuthedQuery<SupplierPerformanceItem[]>(["supplier-reliability", regionId], (token) =>
-    fetchSupplierReliability(regionId, token),
+  return useQuery<SupplierPerformanceItem[]>(["supplier-reliability", regionId], () =>
+    fetchSupplierReliability(regionId),
   );
 }
 
 export function useRegionalGrowth() {
-  return useAuthedQuery<RegionalGrowthItem[]>(["regional-growth"], (token) => fetchRegionalGrowth(token));
+  return useQuery<RegionalGrowthItem[]>(["regional-growth"], () => fetchRegionalGrowth());
 }
 
 export function useLatestForecast(productId: string | null, regionId: string | null) {
   const shouldFetch = Boolean(productId && regionId);
-  return useOptionalAuthedQuery<ForecastRecordResponse>(["latest-forecast", productId, regionId, shouldFetch], async (token) => {
+  return useOptionalQuery<ForecastRecordResponse>(["latest-forecast", productId, regionId], async () => {
     if (!productId || !regionId) {
       return null;
     }
-    return fetchLatestForecast(productId, regionId, token);
-  });
+    return fetchLatestForecast(productId, regionId);
+  }, shouldFetch);
 }
 
 export function useForecastHistory(productId: string | null) {
   const shouldFetch = Boolean(productId);
-  return useOptionalAuthedQuery<ForecastRecordResponse[]>(["forecast-history", productId, shouldFetch], async (token) => {
+  return useOptionalQuery<ForecastRecordResponse[]>(["forecast-history", productId], async () => {
     if (!productId) {
       return null;
     }
-    return fetchForecastHistory(productId, token);
-  });
+    return fetchForecastHistory(productId);
+  }, shouldFetch);
 }
 
 export function usePipelineStatus(enabled = true) {
-  return useAuthedQuery<PipelineStatus>(["pipeline-status", enabled], (token) => fetchPipelineStatus(token), enabled);
+  return useQuery<PipelineStatus>(["pipeline-status"], () => fetchPipelineStatus(), enabled);
 }

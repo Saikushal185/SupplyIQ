@@ -4,7 +4,6 @@ export interface DashboardReadyArgs {
   hasSales: boolean;
   hasProductSales: boolean;
   hasForecastRunCount: boolean;
-  canViewPipeline: boolean;
   hasPipelineStatus: boolean;
   hasPipelineStatusError: boolean;
 }
@@ -15,12 +14,11 @@ export function isDashboardReady({
   hasSales,
   hasProductSales,
   hasForecastRunCount,
-  canViewPipeline,
   hasPipelineStatus,
   hasPipelineStatusError,
 }: DashboardReadyArgs) {
   const coreDataReady = hasInventorySummary && hasLowStock && hasSales && hasProductSales && hasForecastRunCount;
-  const pipelineReady = !canViewPipeline || hasPipelineStatus || hasPipelineStatusError;
+  const pipelineReady = hasPipelineStatus || hasPipelineStatusError;
   return coreDataReady && pipelineReady;
 }
 
