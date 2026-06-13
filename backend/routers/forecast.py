@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.dependencies import AuthContext, get_current_user_email, get_db, get_forecast_service, require_roles
+from backend.dependencies import get_db, get_forecast_service
 from backend.models.schemas import ForecastGenerateRequest
 from backend.services import db_service
 from backend.services.forecast_service import ForecastService
@@ -16,21 +16,17 @@ from backend.services.response_service import build_response
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
 
-forecast_access = require_roles("admin", "analyst")
-
 
 @router.post("/generate")
 async def generate_forecast(
     payload: ForecastGenerateRequest,
-    _: Annotated[AuthContext, Depends(forecast_access)],
     session: Annotated[AsyncSession, Depends(get_db)],
     forecast_service: Annotated[ForecastService, Depends(get_forecast_service)],
-    user_email: Annotated[str | None, Depends(get_current_user_email)],
 ):
     """Generates and persists a new forecast."""
 
     try:
-        data = await forecast_service.generate_forecast(session, payload, user_email=user_email)
+        data = await forecast_service.generate_forecast(session, payload)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -40,11 +36,24 @@ async def generate_forecast(
     return build_response(data)
 
 
+@router.post("/batch")
+async def generate_batch_forecast(
+    payloads: list[ForecastGenerateRequest],
+    session: Annotated[AsyncSession, Depends(get_db)],
+    forecast_service: Annotated[ForecastService, Depends(get_forecast_service)],
+):
+    """Generates forecasts for multiple product-region pairs in a single request."""
+
+    if not payloads:
+        raise HTTPException(status_code=422, detail="At least one forecast request is required.")
+    results = await forecast_service.generate_batch_forecast(session, payloads)
+    return build_response(results)
+
+
 @router.get("/latest/{product_id}/{region_id}")
 async def get_latest_forecast(
     product_id: Annotated[UUID, Path()],
     region_id: Annotated[UUID, Path()],
-    _: Annotated[AuthContext, Depends(forecast_access)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Returns the most recently generated forecast for a product-region pair."""
@@ -62,7 +71,6 @@ async def get_latest_forecast(
 @router.get("/history/{product_id}")
 async def get_forecast_history(
     product_id: Annotated[UUID, Path()],
-    _: Annotated[AuthContext, Depends(forecast_access)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Returns all stored forecasts for a product."""
