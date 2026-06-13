@@ -8,8 +8,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.dependencies import get_db
+from backend.dependencies import get_cache_service, get_db
 from backend.services import db_service
+from backend.services.cache_service import CacheService
 from backend.services.response_service import build_response
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
@@ -29,12 +30,18 @@ async def get_inventory_summary(
 @router.get("/low-stock")
 async def get_low_stock(
     session: Annotated[AsyncSession, Depends(get_db)],
+    cache_service: Annotated[CacheService, Depends(get_cache_service)],
     region_id: Annotated[UUID | None, Query()] = None,
 ):
     """Returns positions that are currently below their reorder point."""
 
+    cache_key = cache_service.build_key("inventory.low-stock", {"region_id": region_id})
+    cached = await cache_service.get_json(cache_key)
+    if cached is not None:
+        return build_response(cached, cached=True)
     data = await db_service.get_low_stock(session, region_id=region_id)
-    return build_response(data)
+    await cache_service.set_json(cache_key, data)
+    return build_response(data, cached=False)
 
 
 @router.get("/{product_id}/history")
