@@ -140,8 +140,26 @@ def _safe_load_artifact(path: Path) -> Any | None:
         return None
 
 
-XGB_RESIDUAL_MODEL = _safe_load_artifact(XGB_ARTIFACT_PATH)
-SHAP_EXPLAINER = _safe_load_artifact(SHAP_EXPLAINER_ARTIFACT_PATH)
+_XGB_RESIDUAL_MODEL: Any | None = None
+_SHAP_EXPLAINER: Any | None = None
+
+
+def get_xgb_residual_model() -> Any | None:
+    """Returns the cached XGBoost residual model, loading it lazily so artifacts trained after startup are picked up."""
+
+    global _XGB_RESIDUAL_MODEL
+    if _XGB_RESIDUAL_MODEL is None:
+        _XGB_RESIDUAL_MODEL = _safe_load_artifact(XGB_ARTIFACT_PATH)
+    return _XGB_RESIDUAL_MODEL
+
+
+def get_shap_explainer() -> Any | None:
+    """Returns the cached SHAP explainer, loading it lazily so artifacts trained after startup are picked up."""
+
+    global _SHAP_EXPLAINER
+    if _SHAP_EXPLAINER is None:
+        _SHAP_EXPLAINER = _safe_load_artifact(SHAP_EXPLAINER_ARTIFACT_PATH)
+    return _SHAP_EXPLAINER
 
 
 def build_prophet_artifact_path(product_id: Any, region_id: Any) -> Path:
@@ -641,13 +659,11 @@ async def generate_forecast(
     region_id: Any,
     db_session: AsyncSession,
     *,
-    user_email: str | None = None,
     prophet_model: Any | None = None,
     xgb_model: Any | None = None,
     explainer: Any | None = None,
-    email_sender: Any | None = None,
 ) -> Any:
-    """Generates, explains, persists, and alerts on a seven-day forecast."""
+    """Generates, explains, and persists a seven-day forecast."""
 
     inventory_context = await _load_inventory_context(
         db_session,
@@ -671,10 +687,10 @@ async def generate_forecast(
     baseline_predictions = [_coerce_float(row.get("yhat")) for row in prophet_rows]
     future_feature_rows = build_future_feature_rows(history_rows, future_dates, baseline_predictions)
     residual_predictions = _predict_residual_corrections(
-        xgb_model or XGB_RESIDUAL_MODEL,
+        xgb_model or get_xgb_residual_model(),
         future_feature_rows,
     )
-    shap_values = _compute_shap_values(explainer or SHAP_EXPLAINER, future_feature_rows)
+    shap_values = _compute_shap_values(explainer or get_shap_explainer(), future_feature_rows)
     forecast_days = _build_forecast_rows(prophet_rows, residual_predictions)
     top_features = summarize_feature_impacts(future_feature_rows, shap_values, top_n=5)
 
@@ -698,23 +714,6 @@ async def generate_forecast(
         "method": "shap_tree_explainer",
         "top_features": top_features,
     }
-
-    if stockout_risk is not None and user_email:
-        if email_sender is None:
-            from pipeline.flows.alert_flow import send_stockout_risk_email
-
-            email_sender = send_stockout_risk_email
-
-        try:
-            await email_sender(
-                recipient_email=user_email,
-                product_name=str(inventory_context.product.name),
-                region_name=str(inventory_context.region.name),
-                stockout_date=str(stockout_risk["stockout_date"]),
-                current_stock_level=int(stockout_risk["current_stock_level"]),
-            )
-        except Exception as exc:  # pragma: no cover - exercised with networked integrations
-            logger.warning("Unable to send stockout alert email: %s", exc)
 
     return await _save_forecast_run(
         db_session,
