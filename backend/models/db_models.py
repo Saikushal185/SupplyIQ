@@ -112,6 +112,9 @@ class SupplierShipment(Base):
     """Represents a supplier shipment for a product."""
 
     __tablename__ = "supplier_shipments"
+    __table_args__ = (
+        UniqueConstraint("product_id", "supplier_name", "expected_date", name="uq_supplier_shipments_product_supplier_expected"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

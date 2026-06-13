@@ -1,20 +1,21 @@
-"""Prefect Cloud integration helpers for pipeline status visibility."""
+"""Local ingestion pipeline status visibility."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
-import httpx
+from backend.services.cache_service import CacheService
 
-from backend.settings import get_settings
+LAST_RUN_KEY = "supplyiq:pipeline:last_run"
+FLOW_NAME = "supplyiq-ingestion-flow"
 
 
-def _empty_pipeline_status(*, flow_name: str | None, state_name: str) -> dict[str, object]:
-    """Returns a consistent placeholder payload when Prefect data is unavailable."""
+def _empty_pipeline_status(*, state_name: str) -> dict[str, object]:
+    """Returns a consistent placeholder payload when no run has been recorded."""
 
     return {
         "flow_run_id": None,
-        "flow_name": flow_name,
+        "flow_name": FLOW_NAME,
         "deployment_id": None,
         "deployment_name": None,
         "state_type": "UNKNOWN",
@@ -26,120 +27,35 @@ def _empty_pipeline_status(*, flow_name: str | None, state_name: str) -> dict[st
 
 
 async def get_latest_pipeline_status() -> dict[str, object]:
-    """Returns the latest Prefect flow run status using the configured Cloud API."""
+    """Returns the latest ingestion run recorded in Redis by the pipeline."""
 
-    settings = get_settings()
-    if not settings.prefect_api_url or not settings.prefect_api_key:
-        return _empty_pipeline_status(flow_name=settings.prefect_flow_name, state_name="Not configured")
+    cache_service = CacheService()
+    try:
+        raw = await cache_service.get_json(LAST_RUN_KEY)
+    finally:
+        await cache_service.close()
 
-    latest_run_payload: dict[str, object] = {
-        "sort": "ID_DESC",
-        "limit": 1,
-    }
-    if settings.prefect_flow_name:
-        latest_run_payload["flows"] = {
-            "name": {
-                "any_": [settings.prefect_flow_name],
-            }
-        }
-
-    headers = {
-        "Authorization": f"Bearer {settings.prefect_api_key}",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(
-            f"{settings.prefect_api_url.rstrip('/')}/flow_runs/filter",
-            json=latest_run_payload,
-            headers=headers,
-        )
-        response.raise_for_status()
-        rows = response.json()
-
-    if not rows:
-        return _empty_pipeline_status(flow_name=settings.prefect_flow_name, state_name="No flow runs found")
-
-    latest_run = rows[0]
-    state = latest_run.get("state") if isinstance(latest_run.get("state"), dict) else {}
-    next_scheduled_run_time = await _load_next_scheduled_run_time(
-        prefect_api_url=settings.prefect_api_url,
-        prefect_api_key=settings.prefect_api_key,
-        prefect_flow_name=settings.prefect_flow_name,
-    )
+    if not isinstance(raw, dict):
+        return _empty_pipeline_status(state_name="No runs yet")
 
     return {
-        "flow_run_id": str(latest_run.get("id")) if latest_run.get("id") is not None else None,
-        "flow_name": latest_run.get("name"),
-        "deployment_id": str(latest_run.get("deployment_id")) if latest_run.get("deployment_id") is not None else None,
-        "deployment_name": latest_run.get("deployment_name"),
-        "state_type": state.get("type") or latest_run.get("state_type"),
-        "state_name": state.get("name") or latest_run.get("state_name"),
-        "start_time": _parse_datetime(latest_run.get("start_time")),
-        "end_time": _parse_datetime(latest_run.get("end_time")),
-        "next_scheduled_run_time": next_scheduled_run_time,
+        "flow_run_id": raw.get("run_id"),
+        "flow_name": FLOW_NAME,
+        "deployment_id": None,
+        "deployment_name": None,
+        "state_type": "COMPLETED",
+        "state_name": "Completed",
+        "start_time": _parse_datetime(raw.get("started_at")),
+        "end_time": _parse_datetime(raw.get("completed_at")),
+        "next_scheduled_run_time": None,
     }
-
-
-async def _load_next_scheduled_run_time(
-    *,
-    prefect_api_url: str,
-    prefect_api_key: str,
-    prefect_flow_name: str | None,
-) -> datetime | None:
-    """Best-effort lookup for the next scheduled Prefect flow run."""
-
-    payload: dict[str, object] = {
-        "sort": "EXPECTED_START_TIME_ASC",
-        "limit": 1,
-        "flow_runs": {
-            "state": {
-                "type": {
-                    "any_": ["SCHEDULED"],
-                }
-            },
-            "start_time": {
-                "after_": datetime.now(timezone.utc).isoformat(),
-            },
-        },
-    }
-    if prefect_flow_name:
-        payload["flows"] = {
-            "name": {
-                "any_": [prefect_flow_name],
-            }
-        }
-
-    headers = {
-        "Authorization": f"Bearer {prefect_api_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"{prefect_api_url.rstrip('/')}/flow_runs/filter",
-                json=payload,
-                headers=headers,
-            )
-            response.raise_for_status()
-            rows = response.json()
-    except httpx.HTTPError:
-        return None
-
-    if not rows:
-        return None
-
-    next_run = rows[0]
-    return _parse_datetime(next_run.get("expected_start_time") or next_run.get("start_time"))
 
 
 def _parse_datetime(value: object) -> datetime | None:
-    """Parses Prefect datetime strings into Python datetime objects."""
+    """Parses ISO datetime strings into Python datetime objects."""
 
     if isinstance(value, datetime):
         return value
     if isinstance(value, str) and value:
-        normalized = value.replace("Z", "+00:00")
-        return datetime.fromisoformat(normalized)
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
     return None

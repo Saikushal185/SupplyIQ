@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from backend.middleware.auth import ClerkAuthMiddleware, ClerkTokenVerifier
 from backend.routers import analytics, forecast, inventory, pipeline
+from backend.services.bootstrap_service import run_auto_bootstrap
 from backend.services.cache_service import CacheService
 from backend.services.db_service import SessionLocal, dispose_database_engine, engine, initialize_database
 from backend.services.forecast_service import ForecastService
@@ -27,6 +27,8 @@ async def lifespan(app: FastAPI):
     """Initializes database state and startup services."""
 
     await initialize_database()
+    if get_settings().auto_bootstrap:
+        await run_auto_bootstrap()
     app.state.cache_service = CacheService()
     app.state.forecast_service = ForecastService()
     logger.info("SupplyIQ backend initialized.")
@@ -68,23 +70,6 @@ def create_app() -> FastAPI:
 
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan, version="1.0.0")
-    app.add_middleware(
-        ClerkAuthMiddleware,
-        enabled=settings.auth_enabled,
-        verifier=(
-            ClerkTokenVerifier(
-                jwks_url=settings.clerk_jwks_url,
-                issuer=settings.clerk_issuer,
-                audience=settings.clerk_audience,
-                cache_ttl_seconds=settings.clerk_jwks_cache_ttl_seconds,
-            )
-            if settings.auth_enabled and settings.clerk_jwks_url
-            else None
-        ),
-        public_paths={
-            f"{settings.api_prefix}/health",
-        },
-    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
