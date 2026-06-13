@@ -41,6 +41,37 @@ async def get_analytics_filter_options(session: AsyncSession) -> dict[str, objec
     }
 
 
+async def get_top_products(session: AsyncSession, *, limit: int = 10) -> list[dict[str, object]]:
+    """Returns the top revenue-generating products across all regions."""
+
+    statement = (
+        select(
+            Product.id,
+            Product.name,
+            Product.sku,
+            Product.category,
+            func.sum(func.coalesce(DailySale.revenue, 0)).label("total_revenue"),
+            func.sum(DailySale.units_sold).label("total_units"),
+        )
+        .join(DailySale, DailySale.product_id == Product.id)
+        .group_by(Product.id, Product.name, Product.sku, Product.category)
+        .order_by(func.sum(func.coalesce(DailySale.revenue, 0)).desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(statement)).all()
+    return [
+        {
+            "product_id": product_id,
+            "product_name": product_name,
+            "sku": sku,
+            "category": category,
+            "total_revenue": round(float(total_revenue or 0), 2),
+            "total_units": int(total_units or 0),
+        }
+        for product_id, product_name, sku, category, total_revenue, total_units in rows
+    ]
+
+
 async def get_regional_growth(session: AsyncSession) -> list[dict[str, object]]:
     """Returns the latest month-over-month revenue growth for each region."""
 
